@@ -458,6 +458,43 @@ class ItemSyncTest {
         assertEquals("discarded", client.get("/api/v1/items/${item.id}") { bearer(token) }.body<ItemDto>().status)
     }
 
+    @Test
+    fun foreignPhotoIsRejectedBeforeAnyFileIsWritten() = app { client ->
+        val owner = login(client, phone(35))
+        val stranger = login(client, phone(36))
+        createFamily(client, owner, "照片原主")
+        val item = client.post("/api/v1/items") {
+            bearer(owner)
+            contentType(ContentType.Application.Json)
+            setBody(CreateItemRequest(name = "罐头", expiryDate = "2027-03-03"))
+        }.body<ItemDto>()
+        createFamily(client, stranger, "照片外人")
+        val before = photoFileCount()
+        val denied = client.post("/api/v1/items/${item.id}/photo") {
+            bearer(stranger)
+            setBody(MultiPartFormDataContent(formData {
+                append("file", tinyJpeg(), Headers.build {
+                    append(HttpHeaders.ContentType, ContentType.Image.JPEG.toString())
+                    append(HttpHeaders.ContentDisposition, "filename=\"nope.jpg\"")
+                })
+            }))
+        }
+        assertEquals(HttpStatusCode.NotFound, denied.status)
+        assertTrue(denied.bodyAsText().contains("not_found"))
+        assertFalse(denied.bodyAsText().contains("罐头"))
+        assertEquals(before, photoFileCount())
+        val unknown = client.post("/api/v1/items/${UUID.randomUUID()}/photo") {
+            bearer(stranger)
+            setBody(MultiPartFormDataContent(formData {
+                append("file", tinyJpeg(), Headers.build {
+                    append(HttpHeaders.ContentType, ContentType.Image.JPEG.toString())
+                    append(HttpHeaders.ContentDisposition, "filename=\"missing.jpg\"")
+                })
+            }))
+        }
+        assertEquals(HttpStatusCode.NotFound, unknown.status)
+        assertEquals(before, photoFileCount())
+    }
 }
 
 private fun HttpRequestBuilder.bearer(token: String) {
