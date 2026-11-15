@@ -70,6 +70,13 @@ class SessionService(private val clock: Clock) {
         transaction { Sessions.deleteWhere { Sessions.id eq sessionId } }
     }
 
+    /** True only while the session row exists and `expires_at` is still ahead of the clock. */
+    fun sessionOpen(sessionId: Uuid): Boolean = transaction {
+        val row = Sessions.selectAll().where { Sessions.id eq sessionId }.singleOrNull() ?: return@transaction false
+        val now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC)
+        now.isBefore(row[Sessions.expiresAt])
+    }
+
     fun expiresAt(sessionId: Uuid): OffsetDateTime? = transaction {
         Sessions.selectAll().where { Sessions.id eq sessionId }.singleOrNull()?.get(Sessions.expiresAt)
     }

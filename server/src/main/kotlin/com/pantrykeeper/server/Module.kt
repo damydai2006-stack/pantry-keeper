@@ -81,7 +81,7 @@ fun Application.module(
     val auth = AuthService(config, clock, crypto, sessions)
     val families = FamilyService(clock)
     val purge = PurgeService(clock)
-    val hub = FamilyHub(CoroutineScope(SupervisorJob() + Dispatchers.IO))
+    val hub = FamilyHub(CoroutineScope(SupervisorJob() + Dispatchers.IO), sessions::sessionOpen)
     val photos = PhotoService(config, clock, hub, freeBytes ?: { Files.getFileStore(it).usableSpace })
     val items = ItemService(clock, hub, photos)
     val barcodes = BarcodeService(clock, barcodeFetcher ?: OffBarcodeFetcher(config))
@@ -111,12 +111,18 @@ fun Application.module(
             close()
             return
         }
-        hub.register(ctx.userId, family, this)
+        hub.register(ctx.userId, family, ctx.sessionId, this)
+        val watch = hub.watch(ctx.sessionId)
         try {
             for (frame in incoming) {
                 if (frame is io.ktor.websocket.Frame.Close) break
+                if (!sessions.sessionOpen(ctx.sessionId)) {
+                    hub.revokeSession(ctx.sessionId)
+                    break
+                }
             }
         } finally {
+            watch.cancel()
             hub.unregister(this)
         }
     }
@@ -171,6 +177,7 @@ fun Application.module(
             post("/auth/logout") {
                 val ctx = call.requireSession(sessions, config)
                 sessions.logout(ctx.sessionId)
+                hub.revokeSession(ctx.sessionId)
                 if (ctx.clientKind == "web") call.response.headers.append("Set-Cookie", clearCookie(config))
                 call.respond(mapOf("status" to "ok"))
             }

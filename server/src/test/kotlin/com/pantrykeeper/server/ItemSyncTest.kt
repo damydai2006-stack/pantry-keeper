@@ -353,6 +353,60 @@ class ItemSyncTest {
         assertEquals(HttpStatusCode.OK, trace.status)
         assertEquals("trace_code", trace.body<BarcodeLookup>().reason)
     }
+
+    @Test
+    fun logoutAndExpiryCloseOnlyThatSocket() = app { client ->
+        val admin = login(client, phone(31))
+        val member = login(client, phone(32))
+        val otherDevice = login(client, phone(32))
+        createFamily(client, admin, "会话家庭")
+        val code = client.get("/api/v1/families/current") { bearer(admin) }.body<com.pantrykeeper.server.family.FamilyView>().inviteCode!!
+        client.post("/api/v1/families/join") {
+            bearer(member)
+            contentType(ContentType.Application.Json)
+            setBody(JoinRequest(code))
+        }
+        val ws = wsClient()
+        val loggedOut = socketFrames(ws, member)
+        val kept = socketFrames(ws, otherDevice)
+        assertTrue(loggedOut.started.await(5, TimeUnit.SECONDS))
+        assertTrue(kept.started.await(5, TimeUnit.SECONDS))
+        Thread.sleep(200)
+        val bye = client.post("/api/v1/auth/logout") { bearer(member) }
+        assertEquals(HttpStatusCode.OK, bye.status)
+        val denied = client.get("/api/v1/me") { bearer(member) }
+        assertEquals(HttpStatusCode.Unauthorized, denied.status)
+        loggedOut.thread.join(5_000)
+        assertTrue(
+            loggedOut.frames.any { it.contains("session_revoked") },
+            "alive=${loggedOut.thread.isAlive} frames=${loggedOut.frames}",
+        )
+        assertFalse(loggedOut.frames.any { it.contains("changed") })
+
+        client.post("/api/v1/items") {
+            bearer(admin)
+            contentType(ContentType.Application.Json)
+            setBody(CreateItemRequest(name = "登出后", expiryDate = "2027-09-01"))
+        }
+        assertTrue(awaitFrame(kept, "changed"), kept.frames.toString())
+        assertFalse(loggedOut.frames.any { it.contains("changed") })
+
+        val expiring = login(client, phone(33))
+        createFamily(client, expiring, "过期家庭")
+        val expiredSock = socketFrames(ws, expiring)
+        assertTrue(expiredSock.started.await(5, TimeUnit.SECONDS))
+        client.post("/api/v1/items") {
+            bearer(expiring)
+            contentType(ContentType.Application.Json)
+            setBody(CreateItemRequest(name = "仍在线", expiryDate = "2027-10-01"))
+        }
+        assertTrue(awaitFrame(expiredSock, "changed"), expiredSock.frames.toString())
+        Box.clock.setOffsetSeconds(Box.clock.offsetSeconds() + 31L * 24 * 60 * 60)
+        assertTrue(awaitFrame(expiredSock, "session_revoked"), expiredSock.frames.toString())
+        val still = client.get("/api/v1/me") { bearer(expiring) }
+        assertEquals(HttpStatusCode.Unauthorized, still.status)
+    }
+
 }
 
 private fun HttpRequestBuilder.bearer(token: String) {
@@ -376,6 +430,47 @@ private fun tinyJpeg(): ByteArray {
     val out = ByteArrayOutputStream()
     ImageIO.write(image, "jpg", out)
     return out.toByteArray()
+}
+
+private class LiveSocket(
+    val started: CountDownLatch,
+    val frames: MutableList<String>,
+    val thread: Thread,
+)
+
+private fun socketFrames(ws: HttpClient, token: String): LiveSocket {
+    val started = CountDownLatch(1)
+    val frames = java.util.Collections.synchronizedList(mutableListOf<String>())
+    val thread = Thread {
+        runBlocking {
+            runCatching {
+                ws.webSocket("/api/v1/ws", request = { header(HttpHeaders.Authorization, "Bearer $token") }) {
+                    started.countDown()
+                    for (frame in incoming) {
+                        if (frame is Frame.Text) frames.add(frame.readText())
+                    }
+                }
+            }
+        }
+    }
+    thread.isDaemon = true
+    thread.start()
+    return LiveSocket(started, frames, thread)
+}
+
+private fun awaitFrame(sock: LiveSocket, needle: String): Boolean {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+    while (System.nanoTime() < deadline) {
+        if (sock.frames.any { it.contains(needle) }) return true
+        Thread.sleep(50)
+    }
+    return false
+}
+
+private fun photoFileCount(): Int {
+    val root = java.nio.file.Path.of(Box.config.dataDir)
+    if (!Files.exists(root)) return 0
+    return Files.walk(root).use { stream -> stream.filter { Files.isRegularFile(it) }.count().toInt() }
 }
 
 private suspend fun login(client: HttpClient, phone: String): String {
@@ -466,7 +561,7 @@ private object Box {
                 "PANTRY_PHONE_HMAC_KEY" to Base64.getEncoder().encodeToString(mac),
                 "AUTH_MODE" to "test",
                 "AUTH_TEST_CODE" to testCode,
-                "AUTH_TEST_PHONES" to (21..32).joinToString(",") { phone(it) },
+                "AUTH_TEST_PHONES" to (21..36).joinToString(",") { phone(it) },
                 "PANTRY_COOKIE_SECURE" to "true",
                 "PANTRY_DATA_DIR" to dir.toString(),
             ),
