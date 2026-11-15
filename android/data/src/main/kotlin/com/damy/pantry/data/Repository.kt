@@ -1,0 +1,295 @@
+package com.damy.pantry.data
+
+import com.pantrykeeper.core.model.FieldLimits
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.datetime.LocalDate
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.time.ZoneId
+
+class PantryRepository(
+    private val api: PantryApi,
+    private val cache: ItemCache,
+    val session: SessionStore,
+    private val scope: CoroutineScope,
+    private val today: () -> LocalDate = { shanghaiToday() },
+) {
+    val items = MutableStateFlow<List<CachedItem>>(emptyList())
+    val family = MutableStateFlow<Family?>(null)
+    val online = MutableStateFlow(true)
+    val events = MutableSharedFlow<AppEvent>(extraBufferCapacity = 16)
+
+    @Volatile private var foreground = false
+    private var poll: Job? = null
+    private var closeSocket: (() -> Unit)? = null
+
+    fun setOnline(value: Boolean) {
+        online.value = value
+    }
+
+    fun restoreFromCache() {
+        items.value = cache.snapshot()
+        family.value = session.loadFamily()?.let { runCatching { pantryJson.decodeFromString(Family.serializer(), it) }.getOrNull() }
+    }
+
+    suspend fun boot() {
+        restoreFromCache()
+        if (session.token == null || !online.value) return
+        guard {
+            val me = api.me()
+            session.userId = me.userId
+            session.displayName = me.displayName
+            if (me.familyId == null) {
+                family.value = null
+                session.saveFamily(null)
+                publish(emptyList())
+            } else {
+                pull()
+            }
+        }
+    }
+
+    fun startForeground() {
+        if (foreground) return
+        foreground = true
+        poll = scope.launch {
+            while (isActive && foreground) {
+                if (online.value && session.token != null) {
+                    ensureSocket()
+                    runCatching { pull() }
+                }
+                delay(5_000)
+            }
+        }
+    }
+
+    fun stopForeground() {
+        foreground = false
+        poll?.cancel()
+        poll = null
+        closeSocket?.invoke()
+        closeSocket = null
+    }
+
+    suspend fun requestCode(phone: String) = online {
+        api.requestCode(phone)
+    }
+
+    suspend fun login(phone: String, code: String) = online {
+        val result = api.login(phone, code)
+        session.token = result.token
+        session.userId = result.userId
+        session.displayName = result.displayName
+        session.phoneMask = maskPhone(phone)
+        val me = api.me()
+        if (me.familyId != null) pull() else family.value = null
+    }
+
+    suspend fun logout() {
+        stopForeground()
+        if (session.token != null) runCatching { api.logout() }
+        session.clear()
+        publish(emptyList())
+        cache.setCursor(0)
+        family.value = null
+    }
+
+    suspend fun createFamily(name: String): Family = online {
+        FieldLimits.familyNameError(name)?.let { throw PantryCallException(400, "invalid_name", it) }
+        val created = api.createFamily(name.trim())
+        remember(created)
+        pull()
+        created
+    }
+
+    suspend fun joinFamily(code: String): Family = online {
+        val normalized = normalizeInvite(code) ?: throw PantryCallException(404, "invite_invalid", "邀请码无效，请核对后再试")
+        val joined = api.joinFamily(normalized)
+        remember(joined)
+        pull()
+        joined
+    }
+
+    suspend fun renameFamily(name: String): Family = online {
+        FieldLimits.familyNameError(name)?.let { throw PantryCallException(400, "invalid_name", it) }
+        remember(api.renameFamily(name.trim()))
+    }
+
+    suspend fun resetInvite(): Family = online { remember(api.resetInvite()) }
+
+    suspend fun removeMember(userId: String) = online { api.removeMember(userId); remember(api.currentFamily()) }
+
+    suspend fun transferAdmin(userId: String): Family = online { remember(api.transferAdmin(userId)) }
+
+    suspend fun leaveFamily() = online {
+        api.leaveFamily()
+        family.value = null
+        session.saveFamily(null)
+        publish(emptyList())
+        cache.setCursor(0)
+    }
+
+    suspend fun saveNew(draft: ItemDraft) = online {
+        validate(draft)
+        api.createItem(draft, today().toString())
+        pull()
+    }
+
+    suspend fun saveEdit(original: CachedItem, draft: ItemDraft): String? = online {
+        validate(draft)
+        val fields = diff(original, draft)
+        if (fields.isEmpty()) return@online null
+        val result = api.patchItem(original.id, original.rev, fields)
+        pull()
+        result.message
+    }
+
+    suspend fun batch(ids: List<String>, action: String): BatchOutcome = online {
+        val result = api.batch(ids, action)
+        pull()
+        result
+    }
+
+    suspend fun undo(token: String): UndoOutcome = online {
+        val result = api.undo(token)
+        pull()
+        result
+    }
+
+    suspend fun pull() {
+        if (!online.value || session.token == null) return
+        guard {
+            val page = api.sync(cache.cursor())
+            if (page.reset && cache.cursor() != 0L) {
+                cache.setCursor(0)
+                publish(emptyList())
+                apply(api.sync(0))
+            } else {
+                apply(page)
+            }
+        }
+    }
+
+    private fun apply(page: SyncPage) {
+        val merged = SyncMerger.merge(cache.snapshot(), page.items, page.tombstones.map { it.itemId }.toSet())
+        publish(merged)
+        cache.setCursor(page.rev)
+        page.family?.let { remember(it) }
+    }
+
+    private fun publish(rows: List<CachedItem>) {
+        cache.replace(rows)
+        items.value = rows
+    }
+
+    private fun remember(value: Family): Family {
+        family.value = value
+        session.saveFamily(pantryJson.encodeToString(Family.serializer(), value))
+        return value
+    }
+
+    private fun ensureSocket() {
+        if (closeSocket != null || session.token == null) return
+        closeSocket = api.openSocket(
+            onText = { text ->
+                scope.launch {
+                    when {
+                        "session_revoked" in text -> {
+                            stopForeground()
+                            session.clear()
+                            publish(emptyList())
+                            family.value = null
+                            events.emit(AppEvent.Revoked)
+                        }
+                        "removed_from_family" in text -> {
+                            family.value = null
+                            session.saveFamily(null)
+                            publish(emptyList())
+                            cache.setCursor(0)
+                            events.emit(AppEvent.Removed)
+                        }
+                        "changed" in text -> runCatching { pull() }
+                    }
+                }
+            },
+            onClosed = { closeSocket = null },
+        )
+    }
+
+    private suspend fun <T> online(block: suspend () -> T): T {
+        if (!online.value) throw OfflineException()
+        return guard(block)
+    }
+
+    private suspend fun <T> guard(block: suspend () -> T): T = try {
+        withContext(Dispatchers.IO) { block() }
+    } catch (e: PantryCallException) {
+        if (e.status == 401) {
+            stopForeground()
+            session.clear()
+            events.emit(AppEvent.Revoked)
+        } else if (e.status == 403 && e.code == "not_in_family") {
+            family.value = null
+            session.saveFamily(null)
+            publish(emptyList())
+            events.emit(AppEvent.Removed)
+        }
+        throw e
+    }
+
+    private fun validate(draft: ItemDraft) {
+        FieldLimits.itemNameError(draft.name)?.let { throw PantryCallException(400, "invalid_name", it) }
+        FieldLimits.noteError(draft.note)?.let { throw PantryCallException(400, "invalid_note", it) }
+        FieldLimits.locationError(draft.location)?.let { throw PantryCallException(400, "invalid_location", it) }
+        if (draft.expiryDate.isNullOrBlank() && (draft.shelfLifeValue == null || draft.shelfLifeUnit == null)) {
+            throw PantryCallException(400, "expiry_required", "需要到期日或可推算的保质期")
+        }
+    }
+
+    private fun diff(original: CachedItem, draft: ItemDraft): JsonObject = buildJsonObject {
+        if (draft.name.trim() != original.name) put("name", draft.name.trim())
+        if (draft.category != original.category) put("category", draft.category)
+        if (draft.quantity != original.quantity) put("quantity", draft.quantity)
+        val location = draft.location?.trim()?.ifEmpty { null }
+        if (location != original.location) {
+            if (location == null) put("location", JsonNull) else put("location", location)
+        }
+        val note = draft.note?.trim()?.ifEmpty { null }
+        if (note != original.note) {
+            if (note == null) put("note", JsonNull) else put("note", note)
+        }
+        if (draft.expiryDate != null && draft.expiryDate != original.expiryDate) put("expiry_date", draft.expiryDate)
+        if (draft.reminderTiers != original.reminderTiers) {
+            put("reminder_tiers", buildJsonArray { draft.reminderTiers.forEach { add(JsonPrimitive(it)) } })
+        }
+    }
+}
+
+object SyncMerger {
+    fun merge(local: List<CachedItem>, incoming: List<CachedItem>, tombstoneIds: Set<String>): List<CachedItem> {
+        val map = local.associateBy { it.id }.toMutableMap()
+        incoming.forEach { item ->
+            val prev = map[item.id]
+            if (prev == null || item.rev >= prev.rev) map[item.id] = item
+        }
+        tombstoneIds.forEach { map.remove(it) }
+        return map.values.toList()
+    }
+}
+
+fun shanghaiToday(): LocalDate {
+    val date = java.time.LocalDate.now(ZoneId.of("Asia/Shanghai"))
+    return LocalDate(date.year, date.monthValue, date.dayOfMonth)
+}

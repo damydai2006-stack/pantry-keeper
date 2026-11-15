@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true">
+        <receiver
+            android:name="com.damy.pantry.debug.DebugInputReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.damy.pantry.DEBUG_INPUT" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
