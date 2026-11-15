@@ -11,7 +11,8 @@
     {"id": "DM-m-neg2", "op": "plusMonths", "start": "2026-03-31", "amount": -2, "expect": "2026-01-31"},
     {"id": "DM-y-leap", "op": "plusYears", "start": "2028-02-29", "amount": 1, "expect": "2029-02-28"},
     {"id": "DM-y2", "op": "plusYears", "start": "2026-11-15", "amount": 2, "expect": "2028-11-15"},
-    {"id": "DM-year-end", "op": "plusMonths", "start": "2026-12-31", "amount": 1, "expect": "2027-01-31"}
+    {"id": "DM-year-end", "op": "plusMonths", "start": "2026-12-31", "amount": 1, "expect": "2027-01-31"},
+    {"id": "DM-aug31", "op": "plusMonths", "start": "2026-08-31", "amount": 1, "expect": "2026-09-30"}
   ],
   "shelfLife": [
     {"id": "SL-12M", "start": "2026-11-15", "value": 12, "unit": "month", "valid": true, "expect": "2027-11-15"},
@@ -37,6 +38,8 @@
   "notices": [
     {"id": "N-today", "today": "2026-11-20", "expiry": "2026-11-20", "entry": "2026-11-01", "tiers": ["D5"], "expect": ["EXPIRY_TODAY"]},
     {"id": "N-expired-day1", "today": "2026-11-21", "expiry": "2026-11-20", "entry": "2026-11-01", "tiers": ["D5"], "expect": ["EXPIRED:1"]},
+    {"id": "N-not-day2", "today": "2026-11-22", "expiry": "2026-11-20", "entry": "2026-11-01", "tiers": ["D5"], "expect": []},
+    {"id": "N-not-day9", "today": "2026-11-29", "expiry": "2026-11-20", "entry": "2026-11-01", "tiers": ["D5"], "expect": []},
     {"id": "N-not-day7", "today": "2026-11-27", "expiry": "2026-11-20", "entry": "2026-11-01", "tiers": ["D5"], "expect": []},
     {"id": "N-expired-day8", "today": "2026-11-28", "expiry": "2026-11-20", "entry": "2026-11-01", "tiers": ["D5"], "expect": ["EXPIRED:8"]},
     {"id": "N-expired-day15", "today": "2026-12-05", "expiry": "2026-11-20", "entry": "2026-11-01", "tiers": ["D5"], "expect": ["EXPIRED:15"]},

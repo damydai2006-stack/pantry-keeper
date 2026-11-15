@@ -16,7 +16,8 @@ param(
     [string]$AcmeEmail = '',
     [int]$AcmeHttpPort = 80,
     [string]$PostgresBin = '',
-    [string]$PostgresAdminUser = 'postgres'
+    [string]$PostgresAdminUser = 'postgres',
+    [string]$PostgresAdminPassword = ''
 )
 
 . "$PSScriptRoot\common.ps1"
@@ -26,6 +27,7 @@ Assert-SafeIdent -Name $DatabaseName
 Assert-SafeIdent -Name $DatabaseUser
 Assert-PantryPort -Port $ListenPort
 Assert-PantryPort -Port $PublicPort
+Assert-PantryPort -Port $AcmeHttpPort
 
 $serverService = "$ServicePrefix-server"
 $caddyService = "$ServicePrefix-caddy"
@@ -48,6 +50,7 @@ function Test-ListenPortFree {
 Show-ManualPgHbaInstruction
 Test-ListenPortFree -Port $ListenPort
 Test-ListenPortFree -Port $PublicPort
+Test-ListenPortFree -Port $AcmeHttpPort
 
 New-Item -ItemType Directory -Force -Path @(
     "$InstallRoot\bin", "$InstallRoot\conf", "$InstallRoot\data\photos", "$InstallRoot\logs", "$InstallRoot\backup", "$InstallRoot\web"
@@ -59,28 +62,15 @@ if ([string]::IsNullOrWhiteSpace($PostgresBin)) {
 $psql = Join-Path $PostgresBin 'psql.exe'
 if (-not (Test-Path $psql)) { throw "psql not found at $psql" }
 
-$env:PGPASSWORD = $DatabasePassword
-$sql = @"
-DO `$`$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$DatabaseUser') THEN
-    EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 10', '$DatabaseUser', '$DatabasePassword');
-  END IF;
-END
-`$`$;
-"@
-& $psql -h 127.0.0.1 -U $PostgresAdminUser -d postgres -v ON_ERROR_STOP=1 -c $sql
-if ($LASTEXITCODE -ne 0) { throw 'CREATE ROLE failed' }
-
-$existsDb = & $psql -h 127.0.0.1 -U $PostgresAdminUser -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DatabaseName'"
-if ($existsDb.Trim() -ne '1') {
-    & $psql -h 127.0.0.1 -U $PostgresAdminUser -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $DatabaseName OWNER $DatabaseUser"
-    if ($LASTEXITCODE -ne 0) { throw 'CREATE DATABASE failed' }
-}
-& $psql -h 127.0.0.1 -U $PostgresAdminUser -d postgres -v ON_ERROR_STOP=1 -c "REVOKE CONNECT ON DATABASE $DatabaseName FROM PUBLIC"
-& $psql -h 127.0.0.1 -U $PostgresAdminUser -d postgres -v ON_ERROR_STOP=1 -c "ALTER ROLE $DatabaseUser SET statement_timeout = '5s'"
-if ($ResetPantryPassword) {
-    & $psql -h 127.0.0.1 -U $PostgresAdminUser -d postgres -v ON_ERROR_STOP=1 -c "ALTER ROLE $DatabaseUser PASSWORD '$DatabasePassword'"
+$adminPassword = $PostgresAdminPassword
+if ([string]::IsNullOrEmpty($adminPassword)) { $adminPassword = $DatabasePassword }
+try {
+    Invoke-PantryPsql -PsqlPath $psql -AdminUser $PostgresAdminUser -AdminPassword $adminPassword `
+        -DatabaseUser $DatabaseUser -DatabaseName $DatabaseName -RolePassword $DatabasePassword `
+        -ResetPassword ([bool]$ResetPantryPassword)
+} catch {
+    Write-Host 'Install stopped after the database step. If this run created the pantry role or database, they are left in place and a later run will reuse them without changing the role password unless -ResetPantryPassword is set. PostgreSQL was not restarted.'
+    throw
 }
 
 if ([string]::IsNullOrWhiteSpace($PublicIp)) {
@@ -88,7 +78,7 @@ if ([string]::IsNullOrWhiteSpace($PublicIp)) {
 }
 $caddyTemplate = Get-Content -Raw -Path (Join-Path $PSScriptRoot 'Caddyfile.template')
 $caddyText = $caddyTemplate.Replace('PANTRY_PUBLIC_IP', $PublicIp).Replace('PANTRY_PUBLIC_PORT', "$PublicPort").Replace('PANTRY_LISTEN_PORT', "$ListenPort").Replace('PANTRY_ACME_EMAIL', $AcmeEmail).Replace('PANTRY_WEB_ROOT', "$InstallRoot\web").Replace('PANTRY_ACME_HTTP_PORT', "$AcmeHttpPort")
-Set-Content -Path "$InstallRoot\conf\Caddyfile" -Value $caddyText -Encoding utf8
+Write-PantryUtf8NoBom -Path "$InstallRoot\conf\Caddyfile" -Value $caddyText
 
 function Install-PantryService {
     param([string]$Name, [string]$TemplateName)
@@ -99,9 +89,18 @@ function Install-PantryService {
     $xml = Get-Content -Raw -Path (Join-Path $PSScriptRoot $TemplateName)
     $xml = $xml.Replace('__SERVICE_ID__', $Name).Replace('__INSTALL_ROOT__', $InstallRoot).Replace('__LISTEN_PORT__', "$ListenPort")
     $target = Join-Path $InstallRoot "bin\$Name.xml"
-    Set-Content -Path $target -Value $xml -Encoding utf8
-    Copy-Item $winsw (Join-Path $InstallRoot "bin\$Name.exe") -Force
-    & (Join-Path $InstallRoot "bin\$Name.exe") install
+    Write-PantryUtf8NoBom -Path $target -Value $xml
+    $exe = Join-Path $InstallRoot "bin\$Name.exe"
+    Copy-Item $winsw $exe -Force
+    & $exe status
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "$Name is already installed; leaving the service registration in place."
+    } else {
+        & $exe install
+        if ($LASTEXITCODE -ne 0) {
+            throw "$Name install failed. Directories and the pantry database may already exist; rerun is safe and will not change an existing role password unless -ResetPantryPassword is set."
+        }
+    }
 }
 
 Install-PantryService -Name $serverService -TemplateName 'pantry-server.xml.template'

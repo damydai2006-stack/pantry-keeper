@@ -21,7 +21,7 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/me` | 不含手机号。未加入家庭时 `family_id` 为空 |
-| POST | `/me/settings` | `notify_time`，`HH:mm` |
+| PUT | `/me/settings` | `notify_time`，`HH:mm` |
 | POST | `/families` | 创建。名称 2–20 字。创建者是管理员，并得到 6 位、7 天邀请码 |
 | POST | `/families/join` | `{code}`。已在其他家庭返回 409 `already_in_family`。空家庭、过期、错误码一律 404 `invite_invalid`，不区分原因 |
 | POST | `/families/leave` | 普通成员直接退出。还有其他成员时管理员返回 409 `admin_must_transfer`，数据不变。只剩管理员一人时退出，家庭进入 30 天保留并立刻作废邀请码 |

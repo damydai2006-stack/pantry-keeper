@@ -48,6 +48,7 @@ import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
+import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
@@ -179,7 +180,7 @@ fun Application.module(
                 val familyId = families.currentFamilyId(ctx.userId)
                 call.respond(MeResponse(profile.userId.toString(), profile.displayName, profile.notifyTime, familyId?.toString()))
             }
-            post("/me/settings") {
+            put("/me/settings") {
                 val ctx = call.requireSession(sessions, config)
                 val body = call.receive<SettingsRequest>()
                 sessions.updateNotifyTime(ctx.userId, body.notifyTime)
