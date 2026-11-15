@@ -1,0 +1,34 @@
+# pantry-caddy. Let's Encrypt IP certificate (short-lived profile).
+# install.ps1 substitutes PANTRY_PUBLIC_IP from -PublicIp. No address is stored in git.
+{
+	email PANTRY_ACME_EMAIL
+}
+
+http://PANTRY_PUBLIC_IP:PANTRY_ACME_HTTP_PORT {
+	# HTTP-01 challenge listener. Does not serve the API.
+}
+
+https://PANTRY_PUBLIC_IP:PANTRY_PUBLIC_PORT {
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+	handle /api/* {
+		reverse_proxy 127.0.0.1:PANTRY_LISTEN_PORT
+	}
+	handle /ws* {
+		reverse_proxy 127.0.0.1:PANTRY_LISTEN_PORT
+	}
+	handle /healthz {
+		reverse_proxy 127.0.0.1:PANTRY_LISTEN_PORT
+	}
+	handle /readyz {
+		reverse_proxy 127.0.0.1:PANTRY_LISTEN_PORT
+	}
+	handle {
+		root * PANTRY_WEB_ROOT
+		try_files {path} /index.html
+		file_server
+	}
+}

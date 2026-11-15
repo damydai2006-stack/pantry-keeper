@@ -1,0 +1,57 @@
+# API（PR1）
+
+前缀 `/api/v1`。JSON 字段使用 snake_case。错误体只有 `error` 和 `message`。
+
+时间全部来自注入的 `Clock`。`PANTRY_PROFILE=prod` 时如果测试时钟被打开，进程拒绝启动，且不注册 `/test/*`。
+
+## 登录
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/auth/code` | 手机号。测试模式只为白名单记下固定测试码，响应不包含验证码 |
+| POST | `/auth/login` | `phone`、`code`、`client_kind`（`app` 或 `web`）。App 返回 Bearer。网页设置 `HttpOnly`、`Secure`、`SameSite=Strict` Cookie，响应不带令牌 |
+| POST | `/auth/logout` | 只注销当前会话 |
+
+`AUTH_MODE` 不是 `test` 时，上述接口返回 403 `auth_disabled`。验证码 10 分钟内有效，连续 5 次错误后作废。未在白名单中的号码登录失败，响应不包含家庭数据。
+
+会话 30 天，从最近一次使用滑动。同一次会话 1 分钟内最多写一次库。App 与网页各自滑动，互不踢出。Cookie 写请求还要带 `X-Pantry-Request: 1`。
+
+## 本人与家庭
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/me` | 不含手机号。未加入家庭时 `family_id` 为空 |
+| POST | `/me/settings` | `notify_time`，`HH:mm` |
+| POST | `/families` | 创建。名称 2–20 字。创建者是管理员，并得到 6 位、7 天邀请码 |
+| POST | `/families/join` | `{code}`。已在其他家庭返回 409 `already_in_family`。空家庭、过期、错误码一律 404 `invite_invalid`，不区分原因 |
+| POST | `/families/leave` | 普通成员直接退出。还有其他成员时管理员返回 409 `admin_must_transfer`，数据不变。只剩管理员一人时退出，家庭进入 30 天保留并立刻作废邀请码 |
+| GET | `/families/current` | 所有在籍成员都能看到当前邀请码和过期时间 |
+| PATCH | `/families/current` | 仅管理员改名。其他人 403 `admin_only`，名称不变 |
+| POST | `/families/current/invite/reset` | 仅管理员 |
+| POST | `/families/current/admin` | `{user_id}`。对方成为管理员，自己变为普通成员 |
+| DELETE | `/families/current/members/{uid}` | 仅管理员。被移除者下一次家庭请求 403 `not_in_family`，响应不含家庭内容 |
+
+没有解散家庭的接口。
+
+加入邀请码每人每分钟最多 5 次。
+
+## 测试时钟
+
+仅 `PANTRY_PROFILE=test` 且 `PANTRY_TEST_CLOCK=on`，并携带 `X-Pantry-Test-Token`：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/test/clock` | `{offset_seconds}`，相对进程基准时钟的偏移 |
+| POST | `/test/purge-now` | 删除 `empty_since` 已满 30 天的家庭及其物品、照片记录 |
+
+## 健康检查
+
+`GET /healthz`、`GET /readyz`。`readyz` 标出 `test_code_mode` 和 `test_clock`，不返回验证码、白名单或偏移量。
+
+## 资源归属（给后续 PR）
+
+`FamilyAccess` 要求资源的 `family_id` 等于调用者当前家庭。没有家庭时 403 `not_in_family`。其他家庭或未知 id 一律 404 `not_found`，响应体只有错误码，不含字段或字节。批量里只要有一个 id 不属于当前家庭，整批按未找到拒绝。
+
+## 以后的批量撤销（T-14，本期不实现）
+
+标记、删除仍是整批一个事务。撤销是另一个事务：只回滚这批之后没有被别人改过的条目，并在响应里给出跳过数量。

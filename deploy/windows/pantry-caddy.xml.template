@@ -1,0 +1,13 @@
+<service>
+  <id>__SERVICE_ID__</id>
+  <name>__SERVICE_ID__</name>
+  <description>Pantry Keeper Caddy</description>
+  <executable>__INSTALL_ROOT__\bin\caddy.exe</executable>
+  <arguments>run --config __INSTALL_ROOT__\conf\Caddyfile --adapter caddyfile</arguments>
+  <workingdirectory>__INSTALL_ROOT__</workingdirectory>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+  <env name="XDG_DATA_HOME" value="__INSTALL_ROOT__\data\caddy"/>
+</service>
