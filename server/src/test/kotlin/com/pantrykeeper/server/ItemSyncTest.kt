@@ -407,6 +407,57 @@ class ItemSyncTest {
         assertEquals(HttpStatusCode.Unauthorized, still.status)
     }
 
+    @Test
+    fun undoTokenIsSingleUseInsideTheWindow() = app { client ->
+        val token = login(client, phone(34))
+        createFamily(client, token, "撤销家庭")
+        val item = client.post("/api/v1/items") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(CreateItemRequest(name = "面包", expiryDate = "2027-02-02"))
+        }.body<ItemDto>()
+        val marked = client.post("/api/v1/items/batch") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(BatchItemRequest(listOf(item.id), "used_up"))
+        }
+        assertEquals(HttpStatusCode.OK, marked.status)
+        val undoToken = marked.body<BatchItemResponse>().undoToken!!
+        val first = client.post("/api/v1/items/batch/undo") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(UndoItemRequest(undoToken))
+        }
+        assertEquals(HttpStatusCode.OK, first.status)
+        val after = client.get("/api/v1/items/${item.id}") { bearer(token) }.body<ItemDto>()
+        assertEquals("in_stock", after.status)
+        val second = client.post("/api/v1/items/batch/undo") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(UndoItemRequest(undoToken))
+        }
+        assertEquals(HttpStatusCode.NotFound, second.status)
+        val untouched = client.get("/api/v1/items/${item.id}") { bearer(token) }.body<ItemDto>()
+        assertEquals(after.rev, untouched.rev)
+        assertEquals("in_stock", untouched.status)
+
+        val again = client.post("/api/v1/items/batch") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(BatchItemRequest(listOf(item.id), "discarded"))
+        }
+        val lateToken = again.body<BatchItemResponse>().undoToken!!
+        Box.clock.setOffsetSeconds(Box.clock.offsetSeconds() + 61)
+        val late = client.post("/api/v1/items/batch/undo") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(UndoItemRequest(lateToken))
+        }
+        assertEquals(HttpStatusCode.Gone, late.status)
+        assertTrue(late.bodyAsText().contains("undo_expired"))
+        assertEquals("discarded", client.get("/api/v1/items/${item.id}") { bearer(token) }.body<ItemDto>().status)
+    }
+
 }
 
 private fun HttpRequestBuilder.bearer(token: String) {

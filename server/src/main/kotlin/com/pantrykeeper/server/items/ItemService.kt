@@ -246,6 +246,9 @@ class ItemService(
                 }
                 restored += 1
             }
+            update("delete from batch_ops where undo_token = ?") {
+                it.setObject(1, token.toJava())
+            }
             UndoResult(skipped, restored, rev)
         }
         hub.changed(family, result.rev)
