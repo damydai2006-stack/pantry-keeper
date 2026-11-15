@@ -22,7 +22,13 @@ import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import kotlin.uuid.Uuid
 
+sealed class FamilySignal {
+    data class Changed(val familyId: Uuid) : FamilySignal()
+    data class Removed(val userId: Uuid, val familyId: Uuid) : FamilySignal()
+}
+
 class FamilyService(private val clock: Clock) {
+    var signals: (FamilySignal) -> Unit = {}
     private val random = SecureRandom()
     private val joinLimiter = SlidingLimiter(clock, maxHits = 5, window = Duration.ofMinutes(1))
 
@@ -52,7 +58,7 @@ class FamilyService(private val clock: Clock) {
             it[joinedAt] = now
         }
         load(id, userId)
-    }
+    }.also { signals(FamilySignal.Changed(Uuid.parse(it.id))) }
 
     fun join(userId: Uuid, rawCode: String): FamilyView {
         if (transaction { activeMembership(userId) } != null) {
@@ -85,11 +91,11 @@ class FamilyService(private val clock: Clock) {
                 throw e
             }
             load(family[Families.id], userId)
-        }
+        }.also { signals(FamilySignal.Changed(Uuid.parse(it.id))) }
     }
 
     fun leave(userId: Uuid) {
-        transaction {
+        val familyId = transaction {
             val member = activeMembership(userId)
                 ?: throw ApiException(HttpStatusCode.Forbidden, "not_in_family", "不在家庭中")
             val familyId = member[FamilyMembers.familyId]
@@ -113,7 +119,10 @@ class FamilyService(private val clock: Clock) {
                     it[updatedAt] = now
                 }
             }
+            familyId
         }
+        signals(FamilySignal.Removed(userId, familyId))
+        signals(FamilySignal.Changed(familyId))
     }
 
     fun rename(userId: Uuid, rawName: String): FamilyView = transaction {
@@ -133,7 +142,7 @@ class FamilyService(private val clock: Clock) {
             it[rev] = family[Families.rev] + 1
         }
         load(familyId, userId)
-    }
+    }.also { signals(FamilySignal.Changed(Uuid.parse(it.id))) }
 
     fun resetInvite(userId: Uuid): FamilyView = transaction {
         val familyId = requireAdmin(userId)
@@ -144,7 +153,7 @@ class FamilyService(private val clock: Clock) {
             it[updatedAt] = now
         }
         load(familyId, userId)
-    }
+    }.also { signals(FamilySignal.Changed(Uuid.parse(it.id))) }
 
     fun transfer(userId: Uuid, target: Uuid): FamilyView = transaction {
         val familyId = requireAdmin(userId)
@@ -164,10 +173,10 @@ class FamilyService(private val clock: Clock) {
             it[updatedAt] = now
         }
         load(familyId, userId)
-    }
+    }.also { signals(FamilySignal.Changed(Uuid.parse(it.id))) }
 
     fun remove(userId: Uuid, target: Uuid) {
-        transaction {
+        val familyId = transaction {
             val familyId = requireAdmin(userId)
             if (target == userId) throw ApiException(HttpStatusCode.BadRequest, "invalid_target", "不能移除自己")
             val row = activeMember(familyId, target)
@@ -180,7 +189,10 @@ class FamilyService(private val clock: Clock) {
                 it[leftAt] = now
                 it[leftReason] = "removed"
             }
+            familyId
         }
+        signals(FamilySignal.Removed(target, familyId))
+        signals(FamilySignal.Changed(familyId))
     }
 
     fun current(userId: Uuid): FamilyView = transaction {

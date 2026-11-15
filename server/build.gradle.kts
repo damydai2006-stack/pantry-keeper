@@ -24,6 +24,9 @@ dependencies {
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.serialization.json)
     implementation(libs.ktor.server.status.pages)
+    implementation(libs.ktor.server.websockets)
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.cio)
     implementation(libs.exposed.core)
     implementation(libs.exposed.jdbc)
     implementation(libs.exposed.java.time)
@@ -37,6 +40,7 @@ dependencies {
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.ktor.client.content.negotiation)
+    testImplementation(libs.ktor.client.websockets)
     testImplementation(libs.zonky) {
         exclude(group = "io.zonky.test.postgres")
     }
