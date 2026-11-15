@@ -1,12 +1,12 @@
 package com.pantrykeeper.server
 
-import com.pantrykeeper.server.config.AdjustableClock
 import com.pantrykeeper.server.config.AppConfig
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import java.nio.file.Files
 import java.time.Clock
+import java.time.ZoneOffset
 import java.util.Base64
 import java.util.UUID
 
@@ -46,6 +46,6 @@ fun main() {
     java.io.File(env, "env").writeText("PANTRY_SMOKE_PHONE=$phone\nPANTRY_SMOKE_CODE=$code\n")
     println("smoke-server-ready")
     embeddedServer(Netty, host = config.listenHost, port = config.listenPort) {
-        module(config, AdjustableClock(Clock.systemUTC()))
+        module(config, Clock.system(ZoneOffset.UTC))
     }.start(wait = true)
 }
