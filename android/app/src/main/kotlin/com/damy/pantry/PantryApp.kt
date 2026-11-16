@@ -5,6 +5,7 @@ import com.damy.pantry.data.HttpPantryApi
 import com.damy.pantry.data.PantryDatabase
 import com.damy.pantry.data.PantryRepository
 import com.damy.pantry.data.PrefSession
+import com.damy.pantry.data.openSession
 import com.damy.pantry.data.SqliteItemCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,7 +17,8 @@ class PantryApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        val session = PrefSession(this)
+        val opened = openSession(load = { PrefSession(this) })
+        val session = opened.session
         val pins = BuildConfig.CA_PINS.split(',').map { it.trim() }.filter { it.isNotEmpty() }
         val api = HttpPantryApi(BuildConfig.SERVER_URL, { session.token }, pins)
         repo = PantryRepository(
@@ -25,5 +27,6 @@ class PantryApp : Application() {
             session = session,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         )
+        opened.message?.let { repo.notice.value = it }
     }
 }

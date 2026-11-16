@@ -10,6 +10,7 @@ import com.damy.pantry.data.PrefSession
 import javax.crypto.KeyGenerator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -56,5 +57,15 @@ class QuinnFixesTest {
         val raw = context.getSharedPreferences("pantry", Context.MODE_PRIVATE).getString("token", "")
         assertFalse(raw!!.contains("plain-token"))
         assertEquals("plain-token", session.token)
+    }
+
+    @Test
+    fun legacyPlaintextTokenIsDeleted() {
+        val context = RuntimeEnvironment.getApplication()
+        context.getSharedPreferences("pantry", Context.MODE_PRIVATE).edit().putString("token", "plain-token").apply()
+        val crypto = SessionCrypto(KeyGenerator.getInstance("AES").apply { init(256) }.generateKey())
+        val session = PrefSession(context, crypto)
+        assertNull(session.token)
+        assertNull(context.getSharedPreferences("pantry", Context.MODE_PRIVATE).getString("token", null))
     }
 }

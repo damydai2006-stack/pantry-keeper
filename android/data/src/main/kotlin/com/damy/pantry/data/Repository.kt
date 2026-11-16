@@ -35,12 +35,27 @@ class PantryRepository(
     val events = MutableSharedFlow<AppEvent>(extraBufferCapacity = 16)
 
     @Volatile private var foreground = false
+    @Volatile private var networkUp = true
+    private val serverDown = MutableStateFlow(false)
     private var poll: Job? = null
     private var closeSocket: (() -> Unit)? = null
 
     fun setOnline(value: Boolean) {
-        online.value = value
-        if (value) notice.value = null
+        networkUp = value
+        online.value = value && !serverDown.value
+        if (!serverDown.value && value) notice.value = null
+    }
+
+    private fun markServerDown() {
+        serverDown.value = true
+        online.value = false
+        notice.value = "暂时连不上服务器"
+    }
+
+    private fun markServerUp() {
+        serverDown.value = false
+        notice.value = null
+        online.value = networkUp
     }
 
     fun restoreFromCache() {
@@ -59,8 +74,7 @@ class PantryRepository(
                 if (me.familyId == null) wipeFamilyCache() else pull()
             }
         } catch (_: java.io.IOException) {
-            setOnline(false)
-            notice.value = "暂时连不上服务器"
+            markServerDown()
         } catch (_: PantryCallException) {
             // 401 and not_in_family already wiped inside guard.
         }
@@ -70,12 +84,31 @@ class PantryRepository(
         if (foreground) return
         foreground = true
         poll = scope.launch {
+            var wait = 5_000L
             while (isActive && foreground) {
-                if (online.value && session.token != null) {
+                if (session.token != null && serverDown.value && networkUp) {
+                    val recovered = try {
+                        guard { api.me() }
+                        session.token != null
+                    } catch (_: java.io.IOException) {
+                        false
+                    } catch (_: PantryCallException) {
+                        false
+                    }
+                    if (recovered) {
+                        markServerUp()
+                        runCatching { pull() }
+                        wait = 5_000L
+                    } else {
+                        wait = (wait * 2).coerceAtMost(30_000L)
+                    }
+                } else if (online.value && session.token != null) {
                     ensureSocket()
-                    runCatching { pull() }
+                    val failed = runCatching { pull() }
+                    if (failed.exceptionOrNull() is java.io.IOException) markServerDown()
+                    wait = 5_000L
                 }
-                delay(5_000)
+                delay(wait)
             }
         }
     }
