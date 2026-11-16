@@ -134,6 +134,9 @@ class PantryDatabase(context: Context) : SQLiteOpenHelper(context, "pantry.db", 
             db.execSQL("ALTER TABLE items ADD COLUMN opened_date TEXT")
             db.execSQL("ALTER TABLE items ADD COLUMN after_open_days INTEGER")
         }
+        if (oldVersion < newVersion) {
+            db.execSQL("INSERT OR REPLACE INTO meta (key, value) VALUES ('cursor', '0')")
+        }
     }
 
     companion object {

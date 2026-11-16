@@ -34,14 +34,21 @@ object AlarmMath {
      */
     const val CATCH_UP_AFTER_MINUTES = 15L
 
+    /** Notify + 15 minutes, but never later than 23:59 on that same local day. */
+    fun catchUpSlot(day: java.time.LocalDate, notify: LocalTime, zone: ZoneId): ZonedDateTime {
+        val raw = day.atTime(notify).plusMinutes(CATCH_UP_AFTER_MINUTES).atZone(zone)
+        val latest = day.atTime(23, 59).atZone(zone)
+        return if (raw.toLocalDate() == day && !raw.isAfter(latest)) raw else latest
+    }
+
     fun nextCatchUp(now: ZonedDateTime, notify: LocalTime, sentToday: Boolean): ZonedDateTime {
         val today = now.toLocalDate()
-        val slot = today.atTime(notify).plusMinutes(CATCH_UP_AFTER_MINUTES).atZone(now.zone)
+        val slot = catchUpSlot(today, notify, now.zone)
         val endOfDay = today.plusDays(1).atStartOfDay(now.zone)
         if (!sentToday && now.isBefore(endOfDay)) {
             return if (now.isBefore(slot)) slot else now
         }
-        return today.plusDays(1).atTime(notify).plusMinutes(CATCH_UP_AFTER_MINUTES).atZone(now.zone)
+        return catchUpSlot(today.plusDays(1), notify, now.zone)
     }
 
     fun stillTimeToCatchUp(now: ZonedDateTime, notify: LocalTime, sentToday: Boolean): Boolean {
@@ -50,6 +57,25 @@ object AlarmMath {
         val endOfDay = now.toLocalDate().plusDays(1).atStartOfDay(now.zone)
         return !now.isBefore(notifyAt) && now.isBefore(endOfDay)
     }
+}
+
+/** Bottom navigation height from the design grid, plus the extra clearance under a scrolling list. */
+const val BOTTOM_TAB_DP = 72
+const val LIST_CLEARANCE_DP = 16
+
+/** First system notification prompt is preceded by the in-app explanation. */
+fun shouldExplainNotification(sdk: Int, allowed: Boolean, prompted: Boolean): Boolean =
+    sdk >= 33 && !allowed && !prompted
+
+private const val NOTIF_PROMPTED = "notif_prompted"
+
+fun notificationPrompted(context: android.content.Context): Boolean =
+    context.getSharedPreferences("pantry-reminder", android.content.Context.MODE_PRIVATE)
+        .getBoolean(NOTIF_PROMPTED, false)
+
+fun markNotificationPrompted(context: android.content.Context) {
+    context.getSharedPreferences("pantry-reminder", android.content.Context.MODE_PRIVATE)
+        .edit().putBoolean(NOTIF_PROMPTED, true).apply()
 }
 
 fun formatNotifyTime(hour: Int, minute: Int): String =
