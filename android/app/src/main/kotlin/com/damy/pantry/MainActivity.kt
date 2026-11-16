@@ -239,11 +239,11 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
         }
         composable("stub/{name}") { entry ->
             val name = entry.arguments?.getString("name").orEmpty()
-            if (name == "remind-time") {
-                val scope = rememberCoroutineScope()
-                com.damy.pantry.reminder.NotifyTimeScreen(repo, scope) { nav.popBackStack() }
-            } else {
-                StubScreen(name) { nav.popBackStack() }
+            val scope = rememberCoroutineScope()
+            when (name) {
+                "remind-time" -> com.damy.pantry.reminder.NotifyTimeScreen(repo, scope) { nav.popBackStack() }
+                "remind-access" -> com.damy.pantry.reminder.ReminderAccessScreen { nav.popBackStack() }
+                else -> StubScreen(name) { nav.popBackStack() }
             }
         }
     }

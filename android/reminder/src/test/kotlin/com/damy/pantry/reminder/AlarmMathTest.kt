@@ -46,6 +46,31 @@ class AlarmMathTest {
     }
 
     @Test
+    fun expiredEighthDayIsSentAndTheSecondDayIsNot() {
+        val today = LocalDate(2026, 11, 15)
+        val day8 = item("酱油", "2026-11-07", listOf("D5"))
+        val day2 = item("米", "2026-11-13", emptyList())
+        assertEquals(listOf("酱油已过期 8 天"), duePhrases(today, listOf(day8, day2)))
+    }
+
+    @Test
+    fun summaryStopsAfterFiveNames() {
+        val today = LocalDate(2026, 11, 15)
+        val items = (1..6).map { item("物$it", "2026-11-15", listOf("D5")) }
+        val text = summaryText(today, items)
+        assertTrue(text.startsWith("6 件物品需要注意"))
+        assertTrue(text.contains("等 1 件"))
+    }
+
+    @Test
+    fun exactAlarmDependsOnTheGrant() {
+        assertEquals(AlarmKind.EXACT, AlarmMath.alarmKind(30, canExact = false))
+        assertEquals(AlarmKind.EXACT, AlarmMath.alarmKind(35, canExact = true))
+        assertEquals(AlarmKind.WINDOW, AlarmMath.alarmKind(35, canExact = false))
+        assertEquals(10L * 60L * 1000L, AlarmMath.WINDOW_MILLIS)
+    }
+
+    @Test
     fun missedTierIsNotSentWhenAddedToday() {
         val today = LocalDate(2026, 11, 15)
         val soon = item("面包", "2026-11-17", listOf(Tier.D30.name))

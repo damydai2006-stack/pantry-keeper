@@ -403,25 +403,30 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
                     Text(if (selecting) "取消" else "管理")
                 }
             }
+            val pendingPhotos by com.damy.pantry.data.PendingPhoto.items.collectAsState()
+            val photoLost by com.damy.pantry.data.PendingPhoto.lost.collectAsState()
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
                 if (!online) OfflineBanner(notice)
-                com.damy.pantry.data.PendingPhoto.itemIds().forEach { retryId ->
-                    val bytes = com.damy.pantry.data.PendingPhoto.bytesFor(retryId)
-                    if (bytes != null) {
-                        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("照片未上传，可在编辑页重试", modifier = Modifier.weight(1f), color = Danger, fontSize = 16.sp)
-                            TextButton(onClick = {
-                                scope.launch {
-                                    val prepared = runCatching { com.damy.pantry.capture.compressForUpload(bytes) }.getOrElse {
-                                        repo.notice.value = "照片未上传，可在编辑页重试"
-                                        return@launch
-                                    }
-                                    runCatching { repo.uploadPhoto(retryId, prepared) }
-                                        .onSuccess { com.damy.pantry.data.PendingPhoto.remove(retryId); vm.toast.value = "照片已上传" }
-                                        .onFailure { repo.notice.value = "照片未上传，可在编辑页重试" }
+                photoLost?.let {
+                    Text(it, color = Danger, fontSize = 16.sp, modifier = Modifier.padding(bottom = 8.dp).testTag("photo_lost"))
+                }
+                pendingPhotos.forEach { (retryId, bytes) ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("retry_banner"),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("照片未上传，可在编辑页重试", modifier = Modifier.weight(1f), color = Danger, fontSize = 16.sp)
+                        TextButton(onClick = {
+                            scope.launch {
+                                val prepared = runCatching { com.damy.pantry.capture.compressForUpload(bytes) }.getOrElse {
+                                    repo.notice.value = "照片未上传，可在编辑页重试"
+                                    return@launch
                                 }
-                            }, modifier = Modifier.heightIn(min = 48.dp).testTag("retry_photo")) { Text("重试") }
-                        }
+                                runCatching { repo.uploadPhoto(retryId, prepared) }
+                                    .onSuccess { com.damy.pantry.data.PendingPhoto.remove(retryId); vm.toast.value = "照片已上传" }
+                                    .onFailure { repo.notice.value = "照片未上传，可在编辑页重试" }
+                            }
+                        }, modifier = Modifier.heightIn(min = 48.dp).testTag("retry_photo")) { Text("重试") }
                     }
                 }
                 NotificationOffBanner()
@@ -512,7 +517,8 @@ fun ItemFormScreen(vm: ItemFormViewModel, repo: PantryRepository, id: String?, o
         if (id != null && vm.editing == null) vm.load(items.firstOrNull { it.id == id })
     }
     Column(Modifier.fillMaxSize()) {
-        val retryBytes = if (id == null) null else com.damy.pantry.data.PendingPhoto.bytesFor(id)
+        val pendingPhotos by com.damy.pantry.data.PendingPhoto.items.collectAsState()
+        val retryBytes = if (id == null) null else pendingPhotos[id]
         if (id != null && retryBytes != null) {
             Button(onClick = {
                 scope.launch {
@@ -694,7 +700,8 @@ private fun MinePage(repo: PantryRepository, online: Boolean, onMembers: () -> U
         com.damy.pantry.capture.MateDiagnostics.Entry()
         Choice(repo.session.displayName?.takeIf { it.isNotBlank() && it != "用户" } ?: "设置昵称", "家庭成员看到的名字", onNickname, "mine_nickname")
         Choice(family?.name ?: "家庭", "查看成员和邀请码", onMembers, "mine_family")
-        Choice("每天 09:00", "提醒设置将在后续版本接入", { onStub("remind-time") }, "mine_remind")
+        Choice("每天 ${repo.session.notifyTime ?: "09:00"}", "按这台手机的本地时区", { onStub("remind-time") }, "mine_remind")
+        Choice("提醒权限", "通知、精确闹钟和后台运行", { onStub("remind-access") }, "mine_access")
         val context = LocalContext.current
         TextButton(onClick = {
             if (!online) toast(context, "当前无网络。恢复网络后再退出，才能注销服务器上的会话。") else onLogout()

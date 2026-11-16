@@ -20,6 +20,7 @@ import com.pantrykeeper.server.items.PhotoService
 import com.pantrykeeper.server.sync.FamilyHub
 import com.pantrykeeper.server.http.ApiException
 import com.pantrykeeper.server.http.ErrorBody
+import com.pantrykeeper.server.http.RequestFailures
 import com.pantrykeeper.server.http.appJson
 import io.ktor.http.Cookie
 import io.ktor.http.CookieEncoding
@@ -98,13 +99,21 @@ fun Application.module(
         exception<ApiException> { call, cause ->
             call.respond(cause.status, ErrorBody(cause.code, cause.message ?: ""))
         }
-        exception<io.ktor.server.plugins.BadRequestException> { call, cause ->
-            log.error("request failed: ${cause.javaClass.name}")
-            call.respond(HttpStatusCode.BadRequest, ErrorBody("bad_request", "请求格式不正确"))
-        }
         exception<Throwable> { call, cause ->
-            log.error("request failed: ${cause.javaClass.name}")
-            call.respond(HttpStatusCode.InternalServerError, ErrorBody("internal", "服务器错误"))
+            when {
+                RequestFailures.isMediaType(cause) -> {
+                    RequestFailures.client(cause)
+                    call.respond(HttpStatusCode.UnsupportedMediaType, ErrorBody("unsupported_media_type", "请求格式不正确"))
+                }
+                RequestFailures.isClient(cause) -> {
+                    RequestFailures.client(cause)
+                    call.respond(HttpStatusCode.BadRequest, ErrorBody("bad_request", "请求格式不正确"))
+                }
+                else -> {
+                    RequestFailures.server(cause)
+                    call.respond(HttpStatusCode.InternalServerError, ErrorBody("internal", "服务器错误"))
+                }
+            }
         }
     }
 
