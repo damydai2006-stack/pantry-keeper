@@ -22,7 +22,8 @@ class LoginViewModel(private val repo: PantryRepository) : ViewModel() {
 
     fun canRequestCode(): Boolean = phone.value.length == 11 && secondsLeft.value == 0 && !busy.value
 
-    fun canLogin(): Boolean = phone.value.length == 11 && code.value.length in 4..12 && agreed.value && !busy.value
+    // The server hashes the presented code and does not enforce a digit length.
+    fun canLogin(): Boolean = phone.value.length == 11 && code.value.isNotEmpty() && agreed.value && !busy.value
 
     fun requestCode() {
         if (!agreed.value) {
@@ -118,7 +119,7 @@ class ListViewModel(private val repo: PantryRepository) : ViewModel() {
                 val token = result.undoToken
                 if (token != null) startUndo(token, ids.size, action)
             } catch (e: Exception) {
-                hint.value = e.message ?: "操作失败"
+                hint.value = userFacingMessage(e)
             }
         }
     }
@@ -146,15 +147,15 @@ class ListViewModel(private val repo: PantryRepository) : ViewModel() {
             try {
                 val result = repo.undo(bar.token)
                 undoJob?.cancel()
+                undo.value = null
                 if (result.skipped == 0) {
                     toast.value = "已撤销，物品已回到清单"
-                    undo.value = null
                 } else {
-                    undo.value = bar.copy(skipped = result.skipped, seconds = bar.seconds)
                     toast.value = result.message ?: "${result.skipped} 件已被他人修改，未撤销"
                 }
             } catch (e: Exception) {
-                hint.value = e.message ?: "撤销失败"
+                undo.value = null
+                hint.value = userFacingMessage(e)
             }
         }
     }
@@ -168,7 +169,7 @@ class ItemFormViewModel(private val repo: PantryRepository, private val today: (
     val name = MutableStateFlow("")
     val category = MutableStateFlow("food")
     val quantity = MutableStateFlow(1)
-    val location = MutableStateFlow<String?>(null)
+    val location = MutableStateFlow<String?>("冰箱")
     val customLocation = MutableStateFlow("")
     val note = MutableStateFlow("")
     val useDate = MutableStateFlow(false)
@@ -266,7 +267,7 @@ class ItemFormViewModel(private val repo: PantryRepository, private val today: (
                 }
                 onDone(message)
             } catch (e: Exception) {
-                error.value = e.message ?: "保存失败"
+                error.value = userFacingMessage(e)
             }
         }
     }
@@ -309,7 +310,7 @@ class HistoryViewModel(private val repo: PantryRepository) : ViewModel() {
                 selected.value = emptySet()
                 toast.value = "已恢复到清单"
             } catch (e: Exception) {
-                hint.value = e.message ?: "恢复失败"
+                hint.value = userFacingMessage(e)
             }
         }
     }
@@ -326,7 +327,7 @@ class HistoryViewModel(private val repo: PantryRepository) : ViewModel() {
                 selecting.value = false
                 selected.value = emptySet()
             } catch (e: Exception) {
-                hint.value = e.message ?: "删除失败"
+                hint.value = userFacingMessage(e)
             }
         }
     }

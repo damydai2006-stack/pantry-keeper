@@ -55,7 +55,7 @@ class ClientLogicTest {
             item("h", "历史", 1, "2026-11-01", "used_up"),
         )
         val groups = groupItems(today, rows.filter { it.status == "in_stock" }, "")
-        assertEquals(listOf("已过期", "0–7 天", "8–30 天", "更远"), groups.map { it.title })
+        assertEquals(listOf("已过期", "7 天内（含今天）", "8–30 天", "更远"), groups.map { it.title })
         assertEquals(listOf("过期酱"), groups[0].items.map { it.name })
         assertEquals(listOf("今天奶", "一周"), groups[1].items.map { it.name })
         assertEquals("今天到期", daysLabel(0))
@@ -88,12 +88,12 @@ class ClientLogicTest {
     }
 
     @Test
-    fun undoBarIncludesSkippedCount() {
+    fun undoBarHidesZeroSkipsAndKeepsCountdownSeparate() {
         val text = undoBarText("used_up", 2, 5, 0)
-        assertTrue(text.contains("已将 2 件标记为已用完"))
-        assertTrue(text.contains("跳过 0 件"))
-        assertTrue(text.contains("5 秒"))
-        assertTrue(undoBarText("discarded", 1, 4, 1).contains("已处理"))
+        assertEquals("已将 2 件标记为已用完，已移入历史", text)
+        assertFalse(text.contains("跳过"))
+        assertEquals("5 秒", undoCountdown(5))
+        assertTrue(undoBarText("discarded", 1, 4, 1).contains("1 件已被他人修改，未撤销"))
     }
 
     @Test
@@ -106,6 +106,11 @@ class ClientLogicTest {
         assertFalse(vm.canLogin())
         vm.agreed.value = true
         assertTrue(vm.canLogin())
+        vm.code.value = "k23456789"
+        assertTrue(vm.canLogin())
+        vm.code.value = ""
+        assertFalse(vm.canLogin())
+        vm.code.value = "k23456"
         vm.agreed.value = false
         vm.requestCode()
         advanceTimeBy(1)

@@ -9,6 +9,13 @@ object FieldLimits {
 
     fun codePoints(value: String): Int = value.codePointCount(0, value.length)
 
+    /** Keep at most [max] Unicode code points, never a dangling surrogate. */
+    fun takeCodePoints(value: String, max: Int): String {
+        if (max <= 0 || value.isEmpty()) return ""
+        if (codePoints(value) <= max) return value
+        return value.substring(0, value.offsetByCodePoints(0, max))
+    }
+
     fun familyNameError(name: String): String? {
         val n = codePoints(name.trim())
         return if (n in FAMILY_NAME_MIN..FAMILY_NAME_MAX) null else "家庭名需要 2 到 20 个字"
