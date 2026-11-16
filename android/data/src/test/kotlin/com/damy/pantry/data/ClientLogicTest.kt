@@ -102,15 +102,15 @@ class ClientLogicTest {
         val vm = LoginViewModel(repo)
         assertFalse(vm.canLogin())
         vm.phone.value = "13" + "8" + "0".repeat(8)
-        vm.code.value = "k23456"
+        vm.code.value = "123456"
         assertFalse(vm.canLogin())
         vm.agreed.value = true
         assertTrue(vm.canLogin())
-        vm.code.value = "k23456789"
-        assertTrue(vm.canLogin())
-        vm.code.value = ""
+        vm.code.value = "12345"
         assertFalse(vm.canLogin())
         vm.code.value = "k23456"
+        assertFalse(vm.canLogin())
+        vm.code.value = "123456"
         vm.agreed.value = false
         vm.requestCode()
         advanceTimeBy(1)

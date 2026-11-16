@@ -1,0 +1,104 @@
+package com.damy.pantry.ui
+
+import android.graphics.Bitmap
+import androidx.activity.ComponentActivity
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onRoot
+import com.damy.pantry.capture.CameraDenied
+import com.damy.pantry.capture.CameraExplain
+import com.damy.pantry.capture.ConfirmScreen
+import com.damy.pantry.capture.FailScreen
+import com.damy.pantry.capture.OcrView
+import com.github.takahirom.roborazzi.captureScreenRoboImage
+import java.io.File
+import kotlinx.datetime.LocalDate
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], qualifiers = "w360dp-h800dp-xhdpi", application = android.app.Application::class)
+class CaptureShots {
+    @get:Rule
+    val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test
+    fun confirm() {
+        show {
+            ConfirmScreen(
+                OcrView.Confirm(LocalDate(2027, 3, 15), null, null, false, emptyList(), null, "ocr_expiry"),
+                onBack = {},
+                onManual = {},
+                onNext = {},
+            )
+        }
+        capture("02-confirm")
+    }
+
+    @Test
+    fun ambiguous() {
+        show {
+            ConfirmScreen(
+                OcrView.Confirm(
+                    LocalDate(2027, 3, 4),
+                    null,
+                    null,
+                    true,
+                    listOf("日期有两种读法，请确认。"),
+                    LocalDate(2027, 4, 3),
+                    "ocr_expiry",
+                ),
+                onBack = {},
+                onManual = {},
+                onNext = {},
+            )
+        }
+        capture("19-confirm-ambig")
+    }
+
+    @Test
+    fun recognizeFail() {
+        show { FailScreen("批号 20250312", onRetake = {}, onManual = {}, onDate = {}) }
+        capture("14-recognize-fail")
+    }
+
+    @Test
+    fun cameraPermission() {
+        show { CameraExplain(onCancel = {}, onAllow = {}) }
+        capture("26-dlg-camera-pre")
+    }
+
+    @Test
+    fun cameraDenied() {
+        show { CameraDenied(onSettings = {}, onManual = {}) }
+        capture("27-camera-denied")
+    }
+
+    private fun show(content: @androidx.compose.runtime.Composable () -> Unit) {
+        compose.setContent { PantryTheme { content() } }
+        compose.waitForIdle()
+    }
+
+    private fun capture(name: String) {
+        compose.waitForIdle()
+        val dir = File(System.getProperty("pantry.shots")).parentFile.resolve("capture")
+        val file = File(dir, "$name.png")
+        file.parentFile?.mkdirs()
+        if (file.exists()) file.delete()
+        captureScreenRoboImage(file)
+        if (!file.exists() || file.length() < 100) {
+            val node = if (compose.onAllNodes(isDialog()).fetchSemanticsNodes().isNotEmpty()) compose.onNode(isDialog()) else compose.onRoot()
+            val bitmap = node.captureToImage().asAndroidBitmap()
+            file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        check(file.exists() && file.length() > 100) { "screenshot $name was not written" }
+        file.copyTo(File("/opt/cursor/artifacts", file.name), overwrite = true)
+    }
+}

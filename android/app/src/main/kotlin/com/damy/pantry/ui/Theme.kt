@@ -3,7 +3,11 @@ package com.damy.pantry.ui
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.material3.LocalTextStyle
 import com.damy.pantry.data.ListBucket
 
 val Bg = Color(0xFFF4F1EB)
@@ -61,7 +65,17 @@ private val scheme = lightColorScheme(
     outline = Line,
 )
 
+private val phraseBreak = LineBreak(
+    strategy = LineBreak.Strategy.HighQuality,
+    strictness = LineBreak.Strictness.Strict,
+    wordBreak = LineBreak.WordBreak.Phrase,
+)
+
 @Composable
 fun PantryTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = scheme, content = content)
+    MaterialTheme(colorScheme = scheme) {
+        CompositionLocalProvider(LocalTextStyle provides TextStyle(lineBreak = phraseBreak)) {
+            content()
+        }
+    }
 }

@@ -128,9 +128,9 @@ fun LoginScreen(vm: LoginViewModel, onFamily: () -> Unit, onHome: () -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = code,
-                onValueChange = { vm.code.value = FieldLimits.takeCodePoints(it, 64) },
+                onValueChange = { vm.code.value = it.filter(Char::isDigit).take(6) },
                 modifier = Modifier.weight(1f).testTag("login_code"),
-                placeholder = { Text("验证码") },
+                placeholder = { Text("6 位验证码") },
                 singleLine = true,
             )
             Spacer(Modifier.width(8.dp))
@@ -142,7 +142,7 @@ fun LoginScreen(vm: LoginViewModel, onFamily: () -> Unit, onHome: () -> Unit) {
         }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("login_agree").clickable { vm.agreed.value = !agreed }) {
             Checkbox(checked = agreed, onCheckedChange = { vm.agreed.value = it })
-            Text("我已阅读并同意《用户协议》和《隐私政策》", fontSize = 16.sp)
+            Text(keepPhrases("我已阅读并同意《用户协议》和《隐私政策》"), fontSize = 16.sp, maxLines = 2)
         }
         if (!agreed || error != null) {
             Text(error ?: "请先勾选用户协议和隐私政策", color = Danger, fontSize = 16.sp)
@@ -228,7 +228,7 @@ fun FamilyCreateScreen(repo: PantryRepository, onBack: () -> Unit, onDone: () ->
             Button(
                 onClick = {
                     scope.launch {
-                        runCatching { repo.createFamily(name) }.onSuccess { created = it }.onFailure { error = it.message }
+                        runCatching { repo.createFamily(name) }.onSuccess { created = it }.onFailure { error = userFacingMessage(it) }
                     }
                 },
                 enabled = repo.online.collectAsState().value,
@@ -270,7 +270,7 @@ fun FamilyJoinScreen(repo: PantryRepository, onBack: () -> Unit, onDone: () -> U
         Button(
             onClick = {
                 scope.launch {
-                    runCatching { repo.joinFamily(code) }.onSuccess { onDone() }.onFailure { error = it.message ?: "邀请码无效，请核对后再试" }
+                    runCatching { repo.joinFamily(code) }.onSuccess { onDone() }.onFailure { error = userFacingMessage(it) }
                 }
             },
             modifier = Modifier.fillMaxWidth().padding(top = 16.dp).heightIn(min = 48.dp).testTag("join_submit"),
@@ -338,7 +338,7 @@ fun HomeScreen(
                 Modifier.fillMaxWidth().background(Text).padding(horizontal = 16.dp, vertical = 8.dp).testTag("undo_bar"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(bar.text(), color = Surface, modifier = Modifier.weight(1f), fontSize = 16.sp)
+                Text(keepPhrases(bar.text()), color = Surface, modifier = Modifier.weight(1f), fontSize = 16.sp, maxLines = 2)
                 Text(undoCountdown(bar.seconds), color = Surface, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 8.dp))
                 TextButton(onClick = { listVm.undo() }, modifier = Modifier.heightIn(min = 48.dp).testTag("undo_button")) { Text("撤销", color = Surface, fontWeight = FontWeight.Bold) }
             }
@@ -453,13 +453,20 @@ private fun ItemCard(item: CachedItem, today: LocalDate, selecting: Boolean, che
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.width(6.dp).height(88.dp).background(bucketColor(bucket)))
+        if (item.photoId != null) {
+            Box(
+                Modifier.padding(start = 12.dp).size(56.dp).clip(RoundedCornerShape(12.dp)).background(Surface2).testTag("thumb_${item.name}"),
+                contentAlignment = Alignment.Center,
+            ) { Text("图", color = TextTertiary, fontWeight = FontWeight.Bold) }
+        }
         if (selecting) {
             Checkbox(checked = checked, onCheckedChange = { onCheck() }, modifier = Modifier.testTag("check_${item.name}").size(48.dp))
         }
         Column(Modifier.weight(1f).padding(12.dp)) {
             Text(item.name, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Text("${categoryLabel(item.category)} · ${item.location ?: "未填位置"} · ×${item.quantity}", fontSize = 16.sp, color = TextSecondary)
-            Text("$expiry · $label", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text("$expiry", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text(keepPhrases(label), fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
         Row(
             Modifier.padding(end = 12.dp).clip(RoundedCornerShape(50)).background(bucketSoft(bucket)).padding(horizontal = 8.dp, vertical = 4.dp),
@@ -764,7 +771,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
         "remove" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("移除成员") },
-            text = { Text("确定将${target?.visibleName()}移出「${current?.name}」？移出后对方将立即看不到该家庭的物品。") },
+            text = { Text(keepPhrases("确定将${target?.visibleName()}移出「${current?.name}」？移出后对方将立即看不到该家庭的物品。")) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -779,7 +786,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
         "admin" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("设为管理员") },
-            text = { Text("确定将${target?.visibleName()}设为管理员？转让后你将变为普通成员。") },
+            text = { Text(keepPhrases("确定将${target?.visibleName()}设为管理员？转让后你将变为普通成员。")) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -794,7 +801,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
         "leave-member" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("退出家庭？") },
-            text = { Text("退出后将不能再看到该家庭的物品。邀请码有效期内可再加入。") },
+            text = { Text(keepPhrases("退出后将不能再看到该家庭的物品。邀请码有效期内可再加入。")) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -809,7 +816,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
         "leave-last" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("退出家庭？") },
-            text = { Text("你是最后一名成员。家庭将保留 30 天后删除。保留期内不可再加入，邀请码将失效。") },
+            text = { Text(keepPhrases("你是最后一名成员。家庭将保留 30 天后删除。保留期内不可再加入，邀请码将失效。")) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -826,14 +833,14 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
             title = { Text("须先转让管理员") },
             text = {
                 Column {
-                    Text("还有其他成员时不能直接退出。请选择接任的管理员，默认已选最早加入的人。")
+                    Text(keepPhrases("还有其他成员时不能直接退出。请选择接任的管理员，默认已选最早加入的人。"))
                     current?.members?.filter { it.userId != repo.session.userId }?.forEach { member ->
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { successor = member }) {
                             RadioButton(selected = successor?.userId == member.userId, onClick = { successor = member })
                             Text("${member.visibleName()} · ${member.joinedLabel()}")
                         }
                     }
-                    Text("退出后将不能再看到该家庭的物品。邀请码有效期内可再加入。")
+                    Text(keepPhrases("退出后将不能再看到该家庭的物品。邀请码有效期内可再加入。"))
                 }
             },
             confirmButton = {
@@ -889,13 +896,13 @@ private fun BatchBar(vm: ListViewModel) {
     Row(Modifier.fillMaxWidth().background(Surface).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Action("已用完", "batch_used", selected.isNotEmpty()) { vm.mark("used_up") }
         Action("已处理", "batch_discard", selected.isNotEmpty()) { vm.mark("discarded") }
-        Action("删除", "batch_delete", selected.isNotEmpty()) { confirm = true }
+        Action("删除", "batch_delete", selected.isNotEmpty(), danger = true) { confirm = true }
     }
     if (confirm) {
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text("确定删除？") },
-            text = { Text("删除后无法恢复，也不会进入历史。确定删除这 ${selected.size} 件物品吗？需要可恢复请改用「已用完 / 已处理」。") },
+            text = { Text(keepPhrases("删除后无法恢复，也不会进入历史。确定删除这 ${selected.size} 件物品吗？需要可恢复请改用「已用完 / 已处理」。")) },
             confirmButton = { TextButton(onClick = { confirm = false; vm.confirmDelete() }, modifier = Modifier.testTag("confirm_delete")) { Text("删除", color = Danger) } },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("取消") } },
         )
@@ -908,13 +915,13 @@ private fun HistoryBar(vm: HistoryViewModel) {
     val selected by vm.selected.collectAsState()
     Row(Modifier.fillMaxWidth().background(Surface).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Action("恢复", "history_restore", selected.isNotEmpty()) { vm.restore(selected.toList()) }
-        Action("永久删除", "history_delete", selected.isNotEmpty()) { confirm = true }
+        Action("永久删除", "history_delete", selected.isNotEmpty(), danger = true) { confirm = true }
     }
     if (confirm) {
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text("确定删除？") },
-            text = { Text("删除后永久无法恢复，不会留在历史。确定删除这 ${selected.size} 件吗？") },
+            text = { Text(keepPhrases("删除后永久无法恢复，不会留在历史。确定删除这 ${selected.size} 件吗？")) },
             confirmButton = { TextButton(onClick = { confirm = false; vm.delete(selected.toList()) }) { Text("删除", color = Danger) } },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("取消") } },
         )
@@ -922,8 +929,14 @@ private fun HistoryBar(vm: HistoryViewModel) {
 }
 
 @Composable
-private fun RowScope.Action(label: String, tag: String, enabled: Boolean, onClick: () -> Unit) {
-    Button(onClick = onClick, enabled = enabled, modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag(tag), shape = button) { Text(label) }
+private fun RowScope.Action(label: String, tag: String, enabled: Boolean, danger: Boolean = false, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag(tag),
+        shape = button,
+        colors = ButtonDefaults.buttonColors(containerColor = if (danger) Danger else Brand, contentColor = Surface),
+    ) { Text(label, maxLines = 1, softWrap = false) }
 }
 
 @Composable
@@ -977,7 +990,7 @@ private fun NotificationOffBanner() {
         Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(12.dp)).background(BrandSoft).padding(start = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("未开启通知，可能错过到期提醒。", modifier = Modifier.weight(1f), color = Text, fontSize = 16.sp)
+        Text(keepPhrases("未开启通知，可能错过到期提醒。"), modifier = Modifier.weight(1f), color = Text, fontSize = 16.sp, maxLines = 2)
         TextButton(
             onClick = {
                 val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
@@ -986,6 +999,16 @@ private fun NotificationOffBanner() {
             },
             modifier = Modifier.heightIn(min = 48.dp).testTag("open_notification_settings"),
         ) { Text("去设置") }
+    }
+}
+
+private fun Char.isCjk(): Boolean = code in 0x4E00..0x9FFF
+
+/** Keep a Chinese word on one line, and still allow a break after punctuation or a space. */
+internal fun keepPhrases(text: String): String = buildString {
+    text.forEachIndexed { index, ch ->
+        if (index > 0 && ch.isCjk() && text[index - 1].isCjk()) append('\u2060')
+        append(ch)
     }
 }
 

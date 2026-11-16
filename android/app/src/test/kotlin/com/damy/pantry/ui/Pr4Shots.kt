@@ -47,7 +47,7 @@ class Pr4Shots {
     @Test
     fun listSelectAndDelete() {
         val stock = home(items())
-        show(content = { HomeScreen(stock.repo, stock.list, stock.history, today, {}, {}, {}, {}, {}, {}) })
+        show(content = { HomeScreen(stock.repo, stock.list, stock.history, today, {}, {}, {}, {}, {}, {}, {}) })
         capture("01-list")
         stock.list.selecting.value = true
         stock.list.selected.value = setOf("milk", "soy")
@@ -60,7 +60,7 @@ class Pr4Shots {
     @Test
     fun emptyList() {
         val empty = home(listOf())
-        show(content = { HomeScreen(empty.repo, empty.list, empty.history, today, {}, {}, {}, {}, {}, {}) })
+        show(content = { HomeScreen(empty.repo, empty.list, empty.history, today, {}, {}, {}, {}, {}, {}, {}) })
         capture("13-list-empty")
     }
 
@@ -68,7 +68,7 @@ class Pr4Shots {
     fun undoBar() {
         val undo = home(items())
         undo.list.undo.value = UndoUi("undo-token", 2, "used_up", 5, 0)
-        show(content = { HomeScreen(undo.repo, undo.list, undo.history, today, {}, {}, {}, {}, {}, {}) })
+        show(content = { HomeScreen(undo.repo, undo.list, undo.history, today, {}, {}, {}, {}, {}, {}, {}) })
         capture("15-list-undo")
     }
 
@@ -76,14 +76,14 @@ class Pr4Shots {
     fun offlineList() {
         val offline = home(items())
         offline.repo.setOnline(false)
-        show(content = { HomeScreen(offline.repo, offline.list, offline.history, today, {}, {}, {}, {}, {}, {}) })
+        show(content = { HomeScreen(offline.repo, offline.list, offline.history, today, {}, {}, {}, {}, {}, {}, {}) })
         capture("18-list-offline")
     }
 
     @Test
     fun history() {
         val history = home(items() + item("old", "大米", "2026-10-01", "used_up"))
-        show(content = { HomeScreen(history.repo, history.list, history.history, today, {}, {}, {}, {}, {}, {}) })
+        show(content = { HomeScreen(history.repo, history.list, history.history, today, {}, {}, {}, {}, {}, {}, {}) })
         compose.onNodeWithTag("tab_history").performClick()
         capture("12-history")
     }
@@ -133,6 +133,7 @@ class Pr4Shots {
         compose.waitForIdle()
         val file = File(System.getProperty("pantry.shots"), "$name.png")
         file.parentFile?.mkdirs()
+        if (file.exists()) file.delete()
         captureScreenRoboImage(file)
         if (!file.exists() || file.length() < 100) {
             val node = if (compose.onAllNodes(isDialog()).fetchSemanticsNodes().isNotEmpty()) {
@@ -174,15 +175,15 @@ class Pr4Shots {
     }
 
     private fun items() = listOf(
-        item("milk", "牛奶", "2026-11-08"),
+        item("milk", "牛奶", "2026-11-08", photoId = "p1"),
         item("soy", "酱油", "2026-11-18", location = "橱柜"),
         item("rice", "大米", "2026-11-22"),
         item("salt", "盐", "2026-12-10", location = "橱柜"),
         item("vinegar", "醋", "2027-03-01", location = "橱柜"),
     )
 
-    private fun item(id: String, name: String, expiry: String, status: String = "in_stock", location: String = "冰箱") =
-        CachedItem(id = id, name = name, category = "food", quantity = 1, location = location, expiryDate = expiry, status = status, rev = 1)
+    private fun item(id: String, name: String, expiry: String, status: String = "in_stock", location: String = "冰箱", photoId: String? = null) =
+        CachedItem(id = id, name = name, category = "food", quantity = 1, location = location, expiryDate = expiry, status = status, rev = 1, photoId = photoId)
 
     private data class Home(val repo: PantryRepository, val list: ListViewModel, val history: HistoryViewModel)
 }
@@ -206,5 +207,6 @@ private object QuietApi : PantryApi {
     override suspend fun batch(ids: List<String>, action: String) = error("unused")
     override suspend fun undo(token: String) = error("unused")
     override suspend fun sync(since: Long) = error("unused")
+    override suspend fun barcode(code: String) = error("unused")
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit = {}
 }

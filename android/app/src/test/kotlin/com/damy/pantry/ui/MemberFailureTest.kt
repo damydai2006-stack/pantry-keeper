@@ -102,5 +102,6 @@ private class MemberApi : PantryApi {
     override suspend fun batch(ids: List<String>, action: String) = error("unused")
     override suspend fun undo(token: String) = error("unused")
     override suspend fun sync(since: Long) = error("unused")
+    override suspend fun barcode(code: String) = error("unused")
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit = {}
 }

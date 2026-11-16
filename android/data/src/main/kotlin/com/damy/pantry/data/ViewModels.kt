@@ -22,8 +22,7 @@ class LoginViewModel(private val repo: PantryRepository) : ViewModel() {
 
     fun canRequestCode(): Boolean = phone.value.length == 11 && secondsLeft.value == 0 && !busy.value
 
-    // The server hashes the presented code and does not enforce a digit length.
-    fun canLogin(): Boolean = phone.value.length == 11 && code.value.isNotEmpty() && agreed.value && !busy.value
+    fun canLogin(): Boolean = phone.value.length == 11 && code.value.length == 6 && code.value.all(Char::isDigit) && agreed.value && !busy.value
 
     fun requestCode() {
         if (!agreed.value) {

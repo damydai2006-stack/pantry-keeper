@@ -180,7 +180,7 @@ fun CameraDenied(onSettings: () -> Unit, onManual: () -> Unit) {
 }
 
 @Composable
-private fun ConfirmScreen(view: OcrView.Confirm, onBack: () -> Unit, onManual: () -> Unit, onNext: (kotlinx.datetime.LocalDate) -> Unit) {
+fun ConfirmScreen(view: OcrView.Confirm, onBack: () -> Unit, onManual: () -> Unit, onNext: (kotlinx.datetime.LocalDate) -> Unit) {
     var chosen by remember(view.expiry) { mutableStateOf(view.expiry) }
     Column(Modifier.fillMaxSize().background(bg).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("确认识别结果", fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -209,7 +209,7 @@ private fun ConfirmScreen(view: OcrView.Confirm, onBack: () -> Unit, onManual: (
 }
 
 @Composable
-private fun FailScreen(raw: String, onRetake: () -> Unit, onManual: () -> Unit, onDate: () -> Unit) {
+fun FailScreen(raw: String, onRetake: () -> Unit, onManual: () -> Unit, onDate: () -> Unit) {
     Column(Modifier.fillMaxSize().background(bg).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("未能识别日期", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text("没有识别出生产日期、保质期或到期日。可以换个角度重拍，也可以自己选择保质期长度或到期日。", fontSize = 16.sp)

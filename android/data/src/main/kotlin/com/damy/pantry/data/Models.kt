@@ -18,6 +18,7 @@ data class CachedItem(
     val reminderTiers: List<String> = emptyList(),
     val status: String,
     val rev: Long,
+    val photoId: String? = null,
 )
 
 @Serializable
