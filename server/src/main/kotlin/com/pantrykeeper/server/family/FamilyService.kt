@@ -4,6 +4,7 @@ import com.pantrykeeper.core.model.FieldLimits
 import com.pantrykeeper.server.auth.SlidingLimiter
 import com.pantrykeeper.server.db.Families
 import com.pantrykeeper.server.db.FamilyMembers
+import com.pantrykeeper.server.db.Users
 import com.pantrykeeper.server.http.ApiException
 import io.ktor.http.HttpStatusCode
 import org.jetbrains.exposed.v1.core.SortOrder
@@ -219,7 +220,13 @@ class FamilyService(private val clock: Clock) {
         val members = FamilyMembers.selectAll().where {
             (FamilyMembers.familyId eq familyId) and FamilyMembers.leftAt.isNull()
         }.orderBy(FamilyMembers.joinedAt to SortOrder.ASC).map { row ->
-            MemberView(row[FamilyMembers.userId].toString(), row[FamilyMembers.role], row[FamilyMembers.joinedAt].toString())
+            val uid = row[FamilyMembers.userId]
+            val name = Users.selectAll().where { Users.id eq uid }.singleOrNull()
+                ?.get(Users.displayName)
+                ?.trim()
+                ?.ifEmpty { null }
+                ?: "用户"
+            MemberView(uid.toString(), name, row[FamilyMembers.role], row[FamilyMembers.joinedAt].toString())
         }
         val role = members.first { it.userId == viewer.toString() }.role
         return FamilyView(
@@ -282,7 +289,7 @@ object InviteCodes {
 }
 
 @Serializable
-data class MemberView(val userId: String, val role: String, val joinedAt: String)
+data class MemberView(val userId: String, val displayName: String, val role: String, val joinedAt: String)
 
 @Serializable
 data class FamilyView(

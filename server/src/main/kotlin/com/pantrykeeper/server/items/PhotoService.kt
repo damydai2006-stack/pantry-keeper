@@ -48,6 +48,19 @@ class PhotoService(
             val message = if (decision.httpStatus == 507) "服务器空间不足，物品已保存但照片未上传" else "这个家庭的照片空间已满"
             throw ApiException(status, code, message)
         }
+        val previous = transaction {
+            queryOne("select id from families where id = ? for update", { it.setObject(1, family.toJava()) }) { it.getObject(1) }
+                ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
+            val row = queryOne(
+                "select photo_id from items where id = ? and family_id = ?",
+                {
+                    it.setObject(1, itemId.toJava())
+                    it.setObject(2, family.toJava())
+                },
+            ) { rs -> rs.getObject(1, java.util.UUID::class.java)?.toKotlin() ?: Uuid.NIL }
+                ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
+            row.takeUnless { it == Uuid.NIL }
+        }
         val photoId = Uuid.random()
         val dir = root.resolve(family.toString())
         Files.createDirectories(dir)
@@ -60,15 +73,6 @@ class PhotoService(
         val saved = try {
             transaction {
                 queryOne("select id from families where id = ? for update", { it.setObject(1, family.toJava()) }) { it.getObject(1) }
-                val row = queryOne(
-                    "select photo_id from items where id = ? and family_id = ?",
-                    {
-                        it.setObject(1, itemId.toJava())
-                        it.setObject(2, family.toJava())
-                    },
-                ) { rs -> rs.getObject(1, java.util.UUID::class.java)?.toKotlin() ?: Uuid.NIL }
-                    ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
-                val previous = row.takeUnless { it == Uuid.NIL }
                 if (previous != null) deleteStored(previous, family)
                 val now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC)
                 val rev = queryOne("select nextval('item_rev_seq')", {}) { it.getLong(1) }!!

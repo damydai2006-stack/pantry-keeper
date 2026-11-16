@@ -209,39 +209,42 @@ class ItemSyncTest {
             setBody(JoinRequest(code))
         }
         val ws = wsClient()
-        val started = CountDownLatch(1)
-        val frame = AtomicReference<String>()
-        val startedAt = AtomicReference(0L)
-        val thread = Thread {
-            runBlocking {
-                ws.webSocket("/api/v1/ws", request = { header(HttpHeaders.Authorization, "Bearer $member") }) {
-                    started.countDown()
-                    startedAt.set(System.nanoTime())
-                    val text = (incoming.receive() as Frame.Text).readText()
-                    frame.set(text)
+        repeat(20) { n ->
+            val started = CountDownLatch(1)
+            val frame = AtomicReference<String>()
+            val thread = Thread {
+                runBlocking {
+                    ws.webSocket("/api/v1/ws", request = { header(HttpHeaders.Authorization, "Bearer $member") }) {
+                        val ready = (incoming.receive() as Frame.Text).readText()
+                        check(ready.contains("\"t\":\"ready\""))
+                        started.countDown()
+                        frame.set((incoming.receive() as Frame.Text).readText())
+                    }
                 }
             }
+            thread.isDaemon = true
+            thread.start()
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            val before = System.nanoTime()
+            client.post("/api/v1/items") {
+                bearer(admin)
+                contentType(ContentType.Application.Json)
+                setBody(CreateItemRequest(name = "通知物$n", expiryDate = "2027-01-02"))
+            }
+            thread.join(10_000)
+            val text = frame.get()
+            assertNotNull(text)
+            assertTrue(text.contains("\"t\":\"changed\""))
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - before) < 10_000)
         }
-        thread.isDaemon = true
-        thread.start()
-        assertTrue(started.await(5, TimeUnit.SECONDS))
-        val before = System.nanoTime()
-        client.post("/api/v1/items") {
-            bearer(admin)
-            contentType(ContentType.Application.Json)
-            setBody(CreateItemRequest(name = "通知物", expiryDate = "2027-01-02"))
-        }
-        thread.join(10_000)
-        val text = frame.get()
-        assertNotNull(text)
-        assertTrue(text.contains("\"t\":\"changed\""))
-        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - before) < 10_000)
 
         val removedGate = CountDownLatch(1)
         val removedText = AtomicReference<String>()
         val thread2 = Thread {
             runBlocking {
                 ws.webSocket("/api/v1/ws", request = { header(HttpHeaders.Authorization, "Bearer $member") }) {
+                    val ready = (incoming.receive() as Frame.Text).readText()
+                    check(ready.contains("\"t\":\"ready\""))
                     removedGate.countDown()
                     removedText.set((incoming.receive() as Frame.Text).readText())
                 }
@@ -353,6 +356,148 @@ class ItemSyncTest {
         assertEquals(HttpStatusCode.OK, trace.status)
         assertEquals("trace_code", trace.body<BarcodeLookup>().reason)
     }
+
+    @Test
+    fun logoutAndExpiryCloseOnlyThatSocket() = app { client ->
+        val admin = login(client, phone(31))
+        val member = login(client, phone(32))
+        val otherDevice = login(client, phone(32))
+        createFamily(client, admin, "会话家庭")
+        val code = client.get("/api/v1/families/current") { bearer(admin) }.body<com.pantrykeeper.server.family.FamilyView>().inviteCode!!
+        client.post("/api/v1/families/join") {
+            bearer(member)
+            contentType(ContentType.Application.Json)
+            setBody(JoinRequest(code))
+        }
+        val ws = wsClient()
+        val loggedOut = socketFrames(ws, member)
+        val kept = socketFrames(ws, otherDevice)
+        assertTrue(loggedOut.started.await(5, TimeUnit.SECONDS))
+        assertTrue(kept.started.await(5, TimeUnit.SECONDS))
+        Thread.sleep(200)
+        val bye = client.post("/api/v1/auth/logout") { bearer(member) }
+        assertEquals(HttpStatusCode.OK, bye.status)
+        val denied = client.get("/api/v1/me") { bearer(member) }
+        assertEquals(HttpStatusCode.Unauthorized, denied.status)
+        loggedOut.thread.join(5_000)
+        assertTrue(
+            loggedOut.frames.any { it.contains("session_revoked") },
+            "alive=${loggedOut.thread.isAlive} frames=${loggedOut.frames}",
+        )
+        assertFalse(loggedOut.frames.any { it.contains("changed") })
+
+        client.post("/api/v1/items") {
+            bearer(admin)
+            contentType(ContentType.Application.Json)
+            setBody(CreateItemRequest(name = "登出后", expiryDate = "2027-09-01"))
+        }
+        assertTrue(awaitFrame(kept, "changed"), kept.frames.toString())
+        assertFalse(loggedOut.frames.any { it.contains("changed") })
+
+        val expiring = login(client, phone(33))
+        createFamily(client, expiring, "过期家庭")
+        val expiredSock = socketFrames(ws, expiring)
+        assertTrue(expiredSock.started.await(5, TimeUnit.SECONDS))
+        client.post("/api/v1/items") {
+            bearer(expiring)
+            contentType(ContentType.Application.Json)
+            setBody(CreateItemRequest(name = "仍在线", expiryDate = "2027-10-01"))
+        }
+        assertTrue(awaitFrame(expiredSock, "changed"), expiredSock.frames.toString())
+        Box.clock.setOffsetSeconds(Box.clock.offsetSeconds() + 31L * 24 * 60 * 60)
+        assertTrue(awaitFrame(expiredSock, "session_revoked"), expiredSock.frames.toString())
+        val still = client.get("/api/v1/me") { bearer(expiring) }
+        assertEquals(HttpStatusCode.Unauthorized, still.status)
+    }
+
+    @Test
+    fun undoTokenIsSingleUseInsideTheWindow() = app { client ->
+        val token = login(client, phone(34))
+        createFamily(client, token, "撤销家庭")
+        val item = client.post("/api/v1/items") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(CreateItemRequest(name = "面包", expiryDate = "2027-02-02"))
+        }.body<ItemDto>()
+        val marked = client.post("/api/v1/items/batch") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(BatchItemRequest(listOf(item.id), "used_up"))
+        }
+        assertEquals(HttpStatusCode.OK, marked.status)
+        val undoToken = marked.body<BatchItemResponse>().undoToken!!
+        val first = client.post("/api/v1/items/batch/undo") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(UndoItemRequest(undoToken))
+        }
+        assertEquals(HttpStatusCode.OK, first.status)
+        val after = client.get("/api/v1/items/${item.id}") { bearer(token) }.body<ItemDto>()
+        assertEquals("in_stock", after.status)
+        val second = client.post("/api/v1/items/batch/undo") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(UndoItemRequest(undoToken))
+        }
+        assertEquals(HttpStatusCode.NotFound, second.status)
+        val untouched = client.get("/api/v1/items/${item.id}") { bearer(token) }.body<ItemDto>()
+        assertEquals(after.rev, untouched.rev)
+        assertEquals("in_stock", untouched.status)
+
+        val again = client.post("/api/v1/items/batch") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(BatchItemRequest(listOf(item.id), "discarded"))
+        }
+        val lateToken = again.body<BatchItemResponse>().undoToken!!
+        Box.clock.setOffsetSeconds(Box.clock.offsetSeconds() + 61)
+        val late = client.post("/api/v1/items/batch/undo") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(UndoItemRequest(lateToken))
+        }
+        assertEquals(HttpStatusCode.Gone, late.status)
+        assertTrue(late.bodyAsText().contains("undo_expired"))
+        assertEquals("discarded", client.get("/api/v1/items/${item.id}") { bearer(token) }.body<ItemDto>().status)
+    }
+
+    @Test
+    fun foreignPhotoIsRejectedBeforeAnyFileIsWritten() = app { client ->
+        val owner = login(client, phone(35))
+        val stranger = login(client, phone(36))
+        createFamily(client, owner, "照片原主")
+        val item = client.post("/api/v1/items") {
+            bearer(owner)
+            contentType(ContentType.Application.Json)
+            setBody(CreateItemRequest(name = "罐头", expiryDate = "2027-03-03"))
+        }.body<ItemDto>()
+        createFamily(client, stranger, "照片外人")
+        val before = photoFileCount()
+        val denied = client.post("/api/v1/items/${item.id}/photo") {
+            bearer(stranger)
+            setBody(MultiPartFormDataContent(formData {
+                append("file", tinyJpeg(), Headers.build {
+                    append(HttpHeaders.ContentType, ContentType.Image.JPEG.toString())
+                    append(HttpHeaders.ContentDisposition, "filename=\"nope.jpg\"")
+                })
+            }))
+        }
+        assertEquals(HttpStatusCode.NotFound, denied.status)
+        assertTrue(denied.bodyAsText().contains("not_found"))
+        assertFalse(denied.bodyAsText().contains("罐头"))
+        assertEquals(before, photoFileCount())
+        val unknown = client.post("/api/v1/items/${UUID.randomUUID()}/photo") {
+            bearer(stranger)
+            setBody(MultiPartFormDataContent(formData {
+                append("file", tinyJpeg(), Headers.build {
+                    append(HttpHeaders.ContentType, ContentType.Image.JPEG.toString())
+                    append(HttpHeaders.ContentDisposition, "filename=\"missing.jpg\"")
+                })
+            }))
+        }
+        assertEquals(HttpStatusCode.NotFound, unknown.status)
+        assertEquals(before, photoFileCount())
+    }
 }
 
 private fun HttpRequestBuilder.bearer(token: String) {
@@ -376,6 +521,47 @@ private fun tinyJpeg(): ByteArray {
     val out = ByteArrayOutputStream()
     ImageIO.write(image, "jpg", out)
     return out.toByteArray()
+}
+
+private class LiveSocket(
+    val started: CountDownLatch,
+    val frames: MutableList<String>,
+    val thread: Thread,
+)
+
+private fun socketFrames(ws: HttpClient, token: String): LiveSocket {
+    val started = CountDownLatch(1)
+    val frames = java.util.Collections.synchronizedList(mutableListOf<String>())
+    val thread = Thread {
+        runBlocking {
+            runCatching {
+                ws.webSocket("/api/v1/ws", request = { header(HttpHeaders.Authorization, "Bearer $token") }) {
+                    started.countDown()
+                    for (frame in incoming) {
+                        if (frame is Frame.Text) frames.add(frame.readText())
+                    }
+                }
+            }
+        }
+    }
+    thread.isDaemon = true
+    thread.start()
+    return LiveSocket(started, frames, thread)
+}
+
+private fun awaitFrame(sock: LiveSocket, needle: String): Boolean {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+    while (System.nanoTime() < deadline) {
+        if (sock.frames.any { it.contains(needle) }) return true
+        Thread.sleep(50)
+    }
+    return false
+}
+
+private fun photoFileCount(): Int {
+    val root = java.nio.file.Path.of(Box.config.dataDir)
+    if (!Files.exists(root)) return 0
+    return Files.walk(root).use { stream -> stream.filter { Files.isRegularFile(it) }.count().toInt() }
 }
 
 private suspend fun login(client: HttpClient, phone: String): String {
@@ -466,7 +652,7 @@ private object Box {
                 "PANTRY_PHONE_HMAC_KEY" to Base64.getEncoder().encodeToString(mac),
                 "AUTH_MODE" to "test",
                 "AUTH_TEST_CODE" to testCode,
-                "AUTH_TEST_PHONES" to (21..32).joinToString(",") { phone(it) },
+                "AUTH_TEST_PHONES" to (21..36).joinToString(",") { phone(it) },
                 "PANTRY_COOKIE_SECURE" to "true",
                 "PANTRY_DATA_DIR" to dir.toString(),
             ),

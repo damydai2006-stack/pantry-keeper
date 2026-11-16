@@ -47,6 +47,14 @@ dependencies {
     testRuntimeOnly(libs.zonky.pg)
 }
 
+tasks.register<JavaExec>("smokeServer") {
+    group = "application"
+    description = "Local embedded-Postgres server for the Android emulator smoke. Credentials stay in /tmp."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.pantrykeeper.server.SmokeServerKt")
+    workingDir = layout.buildDirectory.dir("smoke-server").get().asFile.apply { mkdirs() }
+}
+
 tasks.shadowJar {
     archiveBaseName.set("pantry-server")
     archiveClassifier.set("")
