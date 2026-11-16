@@ -27,7 +27,9 @@ import com.damy.pantry.data.ItemFormViewModel
 import com.damy.pantry.data.ListViewModel
 import com.damy.pantry.data.LoginViewModel
 import com.damy.pantry.data.PantryRepository
-import com.damy.pantry.data.shanghaiToday
+import com.damy.pantry.reminder.OPEN_REMINDERS
+import com.damy.pantry.reminder.ReminderNav
+import com.damy.pantry.reminder.rememberToday
 import com.damy.pantry.ui.FamilyCreateScreen
 import com.damy.pantry.ui.FamilyJoinScreen
 import com.damy.pantry.ui.FamilyChooseScreen
@@ -43,6 +45,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (intent.getBooleanExtra(OPEN_REMINDERS, false)) ReminderNav.open = true
         val repo = (application as PantryApp).repo
         val connectivity = getSystemService(ConnectivityManager::class.java)
         repo.setOnline(connectivity.activeNetwork != null)
@@ -124,11 +127,12 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
         composable("home") {
             val listVm: ListViewModel = viewModel(factory = repo.factory { ListViewModel(repo) })
             val historyVm: HistoryViewModel = viewModel(factory = repo.factory { HistoryViewModel(repo) })
+            val today = rememberToday()
             HomeScreen(
                 repo = repo,
                 listVm = listVm,
                 historyVm = historyVm,
-                today = shanghaiToday(),
+                today = today,
                 onAddManual = { nav.navigate("form") },
                 onEdit = { nav.navigate("edit/$it") },
                 onStub = { nav.navigate("stub/$it") },
@@ -139,12 +143,12 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
             )
         }
         composable("form") {
-            val vm: ItemFormViewModel = viewModel(factory = repo.factory { ItemFormViewModel(repo) { shanghaiToday() } })
+            val vm: ItemFormViewModel = viewModel(factory = repo.factory { ItemFormViewModel(repo) { com.damy.pantry.reminder.AppToday.today() } })
             ItemFormScreen(vm, repo, null, onBack = { nav.popBackStack() }, onSaved = { nav.popBackStack() })
         }
         composable("edit/{id}") { entry ->
             val id = entry.arguments?.getString("id")
-            val vm: ItemFormViewModel = viewModel(key = id, factory = repo.factory { ItemFormViewModel(repo) { shanghaiToday() } })
+            val vm: ItemFormViewModel = viewModel(key = id, factory = repo.factory { ItemFormViewModel(repo) { com.damy.pantry.reminder.AppToday.today() } })
             ItemFormScreen(vm, repo, id, onBack = { nav.popBackStack() }, onSaved = { nav.popBackStack() })
         }
         composable("members") {
@@ -169,7 +173,13 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
             )
         }
         composable("stub/{name}") { entry ->
-            StubScreen(entry.arguments?.getString("name").orEmpty()) { nav.popBackStack() }
+            val name = entry.arguments?.getString("name").orEmpty()
+            if (name == "remind-time") {
+                val scope = rememberCoroutineScope()
+                com.damy.pantry.reminder.NotifyTimeScreen(repo, scope) { nav.popBackStack() }
+            } else {
+                StubScreen(name) { nav.popBackStack() }
+            }
         }
     }
 }

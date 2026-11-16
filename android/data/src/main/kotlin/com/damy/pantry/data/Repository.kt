@@ -30,6 +30,7 @@ class PantryRepository(
     val family = MutableStateFlow<Family?>(null)
     val online = MutableStateFlow(true)
     val events = MutableSharedFlow<AppEvent>(extraBufferCapacity = 16)
+    var onLocalChange: (() -> Unit)? = null
 
     @Volatile private var foreground = false
     private var poll: Job? = null
@@ -104,6 +105,7 @@ class PantryRepository(
         publish(emptyList())
         cache.setCursor(0)
         family.value = null
+        onLocalChange?.invoke()
     }
 
     suspend fun createFamily(name: String): Family = online {
@@ -139,6 +141,7 @@ class PantryRepository(
         session.saveFamily(null)
         publish(emptyList())
         cache.setCursor(0)
+        onLocalChange?.invoke()
     }
 
     suspend fun saveNew(draft: ItemDraft) = online {
@@ -170,6 +173,12 @@ class PantryRepository(
 
     suspend fun barcode(code: String) = api.barcode(code)
 
+    suspend fun updateNotifyTime(time: String) = online {
+        api.updateNotifyTime(time)
+        session.notifyTime = time
+        onLocalChange?.invoke()
+    }
+
     suspend fun pull() {
         if (!online.value || session.token == null) return
         guard {
@@ -189,6 +198,8 @@ class PantryRepository(
         publish(merged)
         cache.setCursor(page.rev)
         page.family?.let { remember(it) }
+        page.notifyTime?.let { session.notifyTime = it }
+        onLocalChange?.invoke()
     }
 
     private fun publish(rows: List<CachedItem>) {

@@ -19,11 +19,16 @@ class PantryApp : Application() {
         val session = PrefSession(this)
         val pins = BuildConfig.CA_PINS.split(',').map { it.trim() }.filter { it.isNotEmpty() }
         val api = HttpPantryApi(BuildConfig.SERVER_URL, { session.token }, pins)
+        com.damy.pantry.reminder.ReminderRuntime.ensureChannel(this)
         repo = PantryRepository(
             api = api,
             cache = SqliteItemCache(PantryDatabase.open(this)),
             session = session,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         )
+        repo.onLocalChange = {
+            if (repo.session.token == null) com.damy.pantry.reminder.ReminderRuntime.cancel(this)
+            else com.damy.pantry.reminder.ReminderRuntime.reschedule(this, repo.session.notifyTime)
+        }
     }
 }

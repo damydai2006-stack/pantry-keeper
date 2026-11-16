@@ -257,7 +257,7 @@ fun HomeScreen(
     onLogout: () -> Unit,
     onRemoved: () -> Unit,
 ) {
-    var tab by remember { mutableStateOf("list") }
+    var tab by remember { mutableStateOf(if (com.damy.pantry.reminder.ReminderNav.open) "remind" else "list") }
     var sheet by remember { mutableStateOf(false) }
     val online by repo.online.collectAsState()
     val context = LocalContext.current
@@ -284,7 +284,7 @@ fun HomeScreen(
         Box(Modifier.weight(1f)) {
             when (tab) {
                 "list" -> ListPage(repo, listVm, today, online, onEdit) { if (online) sheet = true else listVm.hint.value = "恢复网络后再修改" }
-                "remind" -> StubBody("提醒", "提醒清单将在后续版本接入。分组仍是已过期、7 天内（含今天）、8–30 天和更远。")
+                "remind" -> com.damy.pantry.reminder.ReminderList(repo.items.collectAsState().value, today)
                 "history" -> HistoryPage(repo, historyVm, online)
                 else -> MinePage(repo, online, onMembers, onStub) {
                     scope.launch {
@@ -367,6 +367,8 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
             if (!online) OfflineBanner()
+            val bannerContext = LocalContext.current
+            com.damy.pantry.reminder.NotificationBanner { com.damy.pantry.reminder.openNotificationSettings(bannerContext) }
             hint?.let { Text(it, color = Danger, fontSize = 16.sp) }
             OutlinedTextField(query, { vm.query.value = it }, modifier = Modifier.fillMaxWidth().testTag("list_search"), placeholder = { Text("搜索物品名称") }, singleLine = true)
             Text("在库 ${stock.size} 件 · 已过期 $expired 件", color = TextSecondary, fontSize = 16.sp, modifier = Modifier.padding(vertical = 8.dp))

@@ -66,6 +66,7 @@ kotlin {
 dependencies {
     implementation(project(":android:data"))
     implementation(project(":android:capture"))
+    implementation(project(":android:reminder"))
     implementation(platform(libs.compose.bom))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")

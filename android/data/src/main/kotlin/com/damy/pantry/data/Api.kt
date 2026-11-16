@@ -40,6 +40,7 @@ interface PantryApi {
     suspend fun undo(token: String): UndoOutcome
     suspend fun sync(since: Long): SyncPage
     suspend fun barcode(code: String): BarcodeHit
+    suspend fun updateNotifyTime(time: String)
     fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit
 }
 
@@ -139,6 +140,10 @@ class HttpPantryApi(
 
     override suspend fun barcode(code: String): BarcodeHit = decode(exchange("GET", "/api/v1/barcodes/$code"))
 
+    override suspend fun updateNotifyTime(time: String) {
+        exchange("PUT", "/api/v1/me/settings", pantryJson.encodeToString(NotifyBody.serializer(), NotifyBody(time)))
+    }
+
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit {
         val wsBase = when {
             base.startsWith("https://") -> "wss://" + base.removePrefix("https://")
@@ -235,6 +240,9 @@ private data class UndoBody(val undoToken: String)
 
 @Serializable
 private data class ErrorWire(val error: String, val message: String)
+
+@Serializable
+private data class NotifyBody(val notifyTime: String)
 
 private fun ItemDraft.toCreate(today: String) = CreateBody(
     name = name.trim(),

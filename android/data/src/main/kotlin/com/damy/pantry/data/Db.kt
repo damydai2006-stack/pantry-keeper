@@ -32,6 +32,7 @@ interface SessionStore {
     var userId: String?
     var displayName: String?
     var phoneMask: String?
+    var notifyTime: String?
     fun saveFamily(raw: String?)
     fun loadFamily(): String?
     fun clear()
@@ -42,6 +43,7 @@ class MemorySession : SessionStore {
     override var userId: String? = null
     override var displayName: String? = null
     override var phoneMask: String? = null
+    override var notifyTime: String? = "09:00"
     private var family: String? = null
     override fun saveFamily(raw: String?) {
         family = raw
@@ -53,6 +55,7 @@ class MemorySession : SessionStore {
         userId = null
         displayName = null
         phoneMask = null
+        notifyTime = "09:00"
         family = null
     }
 }
@@ -71,6 +74,9 @@ class PrefSession(context: Context) : SessionStore {
     override var phoneMask: String?
         get() = prefs.getString("mask", null)
         set(value) = prefs.edit().putString("mask", value).apply()
+    override var notifyTime: String?
+        get() = prefs.getString("notify", null) ?: "09:00"
+        set(value) = prefs.edit().putString("notify", value).apply()
 
     override fun saveFamily(raw: String?) {
         prefs.edit().putString("family", raw).apply()
