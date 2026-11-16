@@ -13,6 +13,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -38,6 +42,8 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -357,27 +363,13 @@ fun HomeScreen(
         }
     }
     if (sheet) {
-        AlertDialog(
-            onDismissRequest = { sheet = false },
-            title = { Text("入库") },
-            text = {
-                Column {
-                    SheetRow("扫条形码", "查到名称就自动带出", online, "sheet_scan") {
-                        sheet = false
-                        onCapture("scan")
-                    }
-                    SheetRow("拍包装照片", "识别生产日期、保质期或到期日", online, "sheet_photo") {
-                        sheet = false
-                        onCapture("photo")
-                    }
-                    SheetRow("手动填写", "手选保质期或直接选到期日", true, "sheet_manual") {
-                        sheet = false
-                        onAddManual()
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { sheet = false }) { Text("取消") } },
-        )
+        InboundSheet(online, onDismiss = { sheet = false }, onCapture = {
+            sheet = false
+            onCapture(it)
+        }, onManual = {
+            sheet = false
+            onAddManual()
+        })
     }
     val toastText by listVm.toast.collectAsState()
     LaunchedEffect(toastText) { toastText?.let { toast(context, it); listVm.toast.value = null } }
@@ -396,6 +388,10 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
     val notice by repo.notice.collectAsState()
     val groups = groupItems(today, items.filter { it.status == "in_stock" }, query)
     val stock = items.filter { it.status == "in_stock" }
+    val thumbs by repo.thumbs.collectAsState()
+    LaunchedEffect(stock.map { it.photoId }) {
+        stock.mapNotNull { it.photoId }.distinct().forEach { repo.ensureThumb(it) }
+    }
     val expired = stock.count { ReminderRules.daysRemaining(today, LocalDate.parse(it.expiryDate)) < 0 }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -422,7 +418,7 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
                 groups.forEach { group ->
                     Text("${group.title} ${group.items.size}件", fontWeight = FontWeight.Bold, color = bucketColor(group.bucket), modifier = Modifier.padding(top = 12.dp, bottom = 8.dp))
                     group.items.forEach { item ->
-                        ItemCard(item, today, selecting, item.id in selected, { if (selecting) vm.toggle(item.id) else onEdit(item.id) }, { vm.toggle(item.id) })
+                        ItemCard(item, today, selecting, item.id in selected, thumbs[item.photoId], { if (selecting) vm.toggle(item.id) else onEdit(item.id) }, { vm.toggle(item.id) })
                     }
                 }
                 Spacer(Modifier.height(88.dp))
@@ -443,7 +439,7 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
 }
 
 @Composable
-private fun ItemCard(item: CachedItem, today: LocalDate, selecting: Boolean, checked: Boolean, onClick: () -> Unit, onCheck: () -> Unit) {
+private fun ItemCard(item: CachedItem, today: LocalDate, selecting: Boolean, checked: Boolean, thumb: ByteArray?, onClick: () -> Unit, onCheck: () -> Unit) {
     val expiry = LocalDate.parse(item.expiryDate)
     val days = ReminderRules.daysRemaining(today, expiry)
     val bucket = com.damy.pantry.data.listBucket(today, expiry)
@@ -453,11 +449,15 @@ private fun ItemCard(item: CachedItem, today: LocalDate, selecting: Boolean, che
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.width(6.dp).height(88.dp).background(bucketColor(bucket)))
-        if (item.photoId != null) {
+        run {
+            val bitmap = thumb?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
             Box(
                 Modifier.padding(start = 12.dp).size(56.dp).clip(RoundedCornerShape(12.dp)).background(Surface2).testTag("thumb_${item.name}"),
                 contentAlignment = Alignment.Center,
-            ) { Text("图", color = TextTertiary, fontWeight = FontWeight.Bold) }
+            ) {
+                if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = item.name, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                else Text(item.name.take(1).ifBlank { "物" }, color = TextTertiary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
         }
         if (selecting) {
             Checkbox(checked = checked, onCheckedChange = { onCheck() }, modifier = Modifier.testTag("check_${item.name}").size(48.dp))
@@ -486,7 +486,7 @@ fun ItemFormScreen(vm: ItemFormViewModel, repo: PantryRepository, id: String?, o
         val pending = com.damy.pantry.capture.PendingCapture.prefill
         if (pending != null && id == null) {
             com.damy.pantry.capture.PendingCapture.prefill = null
-            vm.prefill(pending.name, pending.expiry, pending.production, pending.category)
+            vm.prefill(pending.name, pending.expiry, pending.production, pending.category, pending.shelfValue, pending.shelfUnit, pending.manualMode)
         }
         if (id != null && vm.editing == null) vm.load(items.firstOrNull { it.id == id })
     }
@@ -925,6 +925,20 @@ private fun HistoryBar(vm: HistoryViewModel) {
             confirmButton = { TextButton(onClick = { confirm = false; vm.delete(selected.toList()) }) { Text("删除", color = Danger) } },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("取消") } },
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun InboundSheet(online: Boolean, onDismiss: () -> Unit, onCapture: (String) -> Unit, onManual: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+            Text("入库", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            SheetRow("扫条形码", "查到名称就自动带出", online, "sheet_scan") { onCapture("scan") }
+            SheetRow("拍包装照片", "识别生产日期、保质期或到期日", online, "sheet_photo") { onCapture("photo") }
+            SheetRow("手动填写", "手选保质期或直接选到期日", true, "sheet_manual") { onManual() }
+            Spacer(Modifier.height(12.dp))
+        }
     }
 }
 

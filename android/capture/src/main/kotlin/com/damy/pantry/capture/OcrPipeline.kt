@@ -20,6 +20,7 @@ sealed interface OcrView {
 
 object OcrPipeline {
     fun interpret(text: String, today: LocalDate): OcrView {
+        val normalized = DateParser.normalize(text)
         val parsed = runCatching { DateParser.parse(text, today) }.getOrNull()
             ?: return OcrView.Manual(text)
         val expiry = parsed.resolvedExpiry ?: return OcrView.Manual(text)
@@ -30,7 +31,7 @@ object OcrPipeline {
             shelf = parsed.shelfLife,
             yellow = parsed.needsConfirm || !parsed.confident,
             notes = parsed.notes,
-            alternate = dayMonthSwap(text, expiry),
+            alternate = dayMonthSwap(normalized, expiry),
             basis = parsed.basis,
         )
     }
@@ -69,6 +70,7 @@ val OCR_SAMPLE_EXPECTATIONS = listOf(
 
 object PendingCapture {
     var prefill: CapturePrefill? = null
+    var jpeg: ByteArray? = null
 }
 
 data class SampleHit(val id: String, val clear: Boolean, val hit: Boolean, val detail: String)

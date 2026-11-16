@@ -32,4 +32,18 @@ class OcrSamplePipelineTest {
         assertEquals(LocalDate(2027, 4, 3), view.alternate)
         assertTrue(view.yellow)
     }
+
+    @Test
+    fun letterOStillOffersTheOtherReading() {
+        val view = OcrPipeline.interpret("EXP 03/04/2O27", today) as OcrView.Confirm
+        assertEquals(LocalDate(2027, 3, 4), view.expiry)
+        assertEquals(LocalDate(2027, 4, 3), view.alternate)
+        assertTrue(view.yellow)
+    }
+
+    @Test
+    fun occludedQuantityIsManual() {
+        val text = java.nio.file.Path.of(System.getProperty("repo.root"), "testdata/ocr/09-unclear-occlusion.txt").toFile().readText()
+        assertTrue(OcrPipeline.interpret(text, today) is OcrView.Manual)
+    }
 }

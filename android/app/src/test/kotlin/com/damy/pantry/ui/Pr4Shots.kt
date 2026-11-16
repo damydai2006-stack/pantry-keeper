@@ -208,5 +208,7 @@ private object QuietApi : PantryApi {
     override suspend fun undo(token: String) = error("unused")
     override suspend fun sync(since: Long) = error("unused")
     override suspend fun barcode(code: String) = error("unused")
+    override suspend fun uploadPhoto(itemId: String, bytes: ByteArray) = error("unused")
+    override suspend fun photoThumb(photoId: String) = error("unused")
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit = {}
 }

@@ -295,6 +295,8 @@ private class ScriptApi : PantryApi {
     }
     override suspend fun sync(since: Long): SyncPage = syncHandler(since)
     override suspend fun barcode(code: String) = BarcodeHit(found = false, reason = "not_found")
+    override suspend fun uploadPhoto(itemId: String, bytes: ByteArray) = error("unused")
+    override suspend fun photoThumb(photoId: String) = error("unused")
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit = {}
     private fun family() = Family("f", "大米一家", "u", "AB2345", "2026-11-22T00:00:00Z", "admin")
 }

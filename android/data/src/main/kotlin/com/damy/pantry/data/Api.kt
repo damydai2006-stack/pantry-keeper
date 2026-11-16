@@ -41,6 +41,8 @@ interface PantryApi {
     suspend fun undo(token: String): UndoOutcome
     suspend fun sync(since: Long): SyncPage
     suspend fun barcode(code: String): BarcodeHit
+    suspend fun uploadPhoto(itemId: String, bytes: ByteArray): CachedItem
+    suspend fun photoThumb(photoId: String): ByteArray
     fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit
 }
 
@@ -142,6 +144,32 @@ class HttpPantryApi(
     override suspend fun sync(since: Long): SyncPage = decode(exchange("GET", "/api/v1/sync?since=$since"))
 
     override suspend fun barcode(code: String): BarcodeHit = decode(exchange("GET", "/api/v1/barcodes/$code"))
+
+    override suspend fun uploadPhoto(itemId: String, bytes: ByteArray): CachedItem {
+        val body = okhttp3.MultipartBody.Builder()
+            .setType(okhttp3.MultipartBody.FORM)
+            .addFormDataPart("file", "photo.jpg", bytes.toRequestBody("image/jpeg".toMediaType()))
+            .build()
+        val builder = okhttp3.Request.Builder().url(base + "/api/v1/items/$itemId/photo").post(body)
+        token()?.let { builder.header("Authorization", "Bearer $it") }
+        client.newCall(builder.build()).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val err = runCatching { pantryJson.decodeFromString(ErrorWire.serializer(), text) }.getOrNull()
+                throw PantryCallException(response.code, err?.error ?: "http", err?.message ?: "照片上传失败")
+            }
+            return pantryJson.decodeFromString(CachedItem.serializer(), text)
+        }
+    }
+
+    override suspend fun photoThumb(photoId: String): ByteArray {
+        val builder = okhttp3.Request.Builder().url(base + "/api/v1/photos/$photoId?thumb=1")
+        token()?.let { builder.header("Authorization", "Bearer $it") }
+        client.newCall(builder.build()).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("thumb")
+            return response.body?.bytes() ?: throw IOException("thumb")
+        }
+    }
 
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit {
         val wsBase = when {

@@ -48,6 +48,9 @@ android {
         }
         release {
             isMinifyEnabled = false
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
         }
     }
     compileOptions {

@@ -52,7 +52,12 @@ object DateParser {
                 if (label == LabelKind.SHELF || line.labels.any { it.kind == LabelKind.SHELF }) addShelf(shelf)
             }
             line.dates.forEach { hit ->
-                val kind = nearestKind(hit.start, hit.end, line.labels) ?: neighborKind(parsed, index)
+                val onLine = nearestKind(hit.start, hit.end, line.labels)
+                val kind = when {
+                    onLine != null -> onLine
+                    hit.kind == DateKind.MONTH_DAY -> null
+                    else -> neighborKind(parsed, index)
+                }
                 when (kind) {
                     LabelKind.PRODUCTION -> resolve(hit, today, asExpiry = false)?.let { productions += it }
                     LabelKind.EXPIRY -> resolve(hit, today, asExpiry = true)?.let { expiries += it }
@@ -288,6 +293,7 @@ object DateParser {
         val hits = mutableListOf<RawDate>()
         fun take(range: IntRange, build: () -> RawDate?) {
             if (range.isEmpty() || range.any { it !in consumed.indices || consumed[it] }) return
+            if (followedByUnit(line, range.last + 1)) return
             val hit = build() ?: return
             range.forEach { consumed[it] = true }
             hits += hit
@@ -306,7 +312,10 @@ object DateParser {
             take(m.range) { fullDate(m.range, m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3].toInt(), ambiguous = false) }
         }
         for (m in ymd.findAll(line)) {
-            take(m.range) { fullDate(m.range, m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3].toInt(), ambiguous = false) }
+            val truncated = m.groupValues[2].length < 2 || m.groupValues[3].length < 2
+            take(m.range) {
+                fullDate(m.range, m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3].toInt(), ambiguous = truncated)
+            }
         }
         for (m in mdy.findAll(line)) {
             take(m.range) { fullDate(m.range, m.groupValues[3].toInt(), m.groupValues[1].toInt(), m.groupValues[2].toInt(), ambiguous = true) }
@@ -348,6 +357,12 @@ object DateParser {
         return RawDate(DateKind.FULL, range.first, range.last + 1, date, month, day, ambiguous)
     }
 
+    private fun followedByUnit(line: String, end: Int): Boolean {
+        if (end > line.length) return false
+        val rest = line.substring(end)
+        return Regex("(?i)^[ \\t]*(?:mg|kg|ml|μg|ug|g|l|片|粒|袋|瓶|盒|支|包|克|毫克|千克|公斤|毫升|升|丸|枚)(?![A-Za-z])").containsMatchIn(rest)
+    }
+
     private fun monthOnly(range: IntRange, year: Int, month: Int): RawDate? {
         if (year !in DateMath.MIN_YEAR..DateMath.MAX_YEAR || month !in 1..12) return null
         val date = LocalDate(year, month, DateMath.lastDayOfMonth(year, month))
@@ -383,7 +398,13 @@ object DateParser {
         for ((from, to) in traditional) s = s.replace(from, to)
         s = s.replace("半年", "6个月")
         s = replaceChineseNumbers(s)
-        val gap = Regex("([0-9OoIl./\\-年月日])\\s+(?=[0-9OoIl./\\-年月日])")
+        val cjkGap = Regex("([\\u4e00-\\u9fff])[ \\t]+(?=[\\u4e00-\\u9fff])")
+        while (true) {
+            val next = cjkGap.replace(s, "$1")
+            if (next == s) break
+            s = next
+        }
+        val gap = Regex("([0-9OoIl./\\-年月日])[ \\t]+(?=[0-9OoIl./\\-年月日])")
         while (true) {
             val next = gap.replace(s, "$1")
             if (next == s) break

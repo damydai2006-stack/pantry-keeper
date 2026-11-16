@@ -462,6 +462,20 @@ class ItemSyncTest {
     }
 
     @Test
+    fun barcodeLookupIsLimitedPerUser() = app { client ->
+        val token = login(client, phone(38))
+        createFamily(client, token, "条码限流")
+        repeat(20) {
+            assertEquals(HttpStatusCode.OK, client.get("/api/v1/barcodes/12345670") { bearer(token) }.status)
+        }
+        val blocked = client.get("/api/v1/barcodes/12345670") { bearer(token) }
+        assertEquals(HttpStatusCode.TooManyRequests, blocked.status)
+        val other = login(client, phone(39))
+        createFamily(client, other, "条码另一家")
+        assertEquals(HttpStatusCode.OK, client.get("/api/v1/barcodes/12345670") { bearer(other) }.status)
+    }
+
+    @Test
     fun memberCanReplaceTheDefaultDisplayName() = app { client ->
         val token = login(client, phone(37))
         val created = createFamily(client, token, "昵称家庭")
@@ -674,7 +688,7 @@ private object Box {
     fun ensure() {
         if (::config.isInitialized) return
         pg = EmbeddedPostgres.builder().setLocaleConfig("locale", "C").setLocaleConfig("lc-messages", "C").start()
-        testCode = "k" + UUID.randomUUID().toString().replace("-", "").take(8)
+        testCode = sixDigitCode()
         clock = AdjustableClock(Clock.fixed(Instant.parse("2026-11-15T00:00:00Z"), ZoneOffset.UTC)).also { it.adjustable = true }
         val dir = Files.createTempDirectory("pantry-photos")
         val enc = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }

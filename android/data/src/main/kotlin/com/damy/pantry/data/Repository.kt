@@ -32,6 +32,7 @@ class PantryRepository(
     val family = MutableStateFlow<Family?>(null)
     val online = MutableStateFlow(true)
     val notice = MutableStateFlow<String?>(null)
+    val thumbs = MutableStateFlow<Map<String, ByteArray>>(emptyMap())
     val events = MutableSharedFlow<AppEvent>(extraBufferCapacity = 16)
 
     @Volatile private var foreground = false
@@ -184,10 +185,28 @@ class PantryRepository(
         wipeFamilyCache()
     }
 
-    suspend fun saveNew(draft: ItemDraft) = online {
+    suspend fun saveNew(draft: ItemDraft): String = online {
         validate(draft)
-        api.createItem(draft, today().toString())
+        val created = api.createItem(draft, today().toString())
         pull()
+        created.id
+    }
+
+    suspend fun uploadPhoto(itemId: String, bytes: ByteArray): CachedItem = online {
+        val saved = api.uploadPhoto(itemId, bytes)
+        saved.photoId?.let { rememberThumb(it, bytes) }
+        pull()
+        saved
+    }
+
+    fun rememberThumb(photoId: String, bytes: ByteArray) {
+        thumbs.value = thumbs.value + (photoId to bytes)
+    }
+
+    suspend fun ensureThumb(photoId: String) {
+        if (photoId in thumbs.value || session.token == null) return
+        val bytes = runCatching { api.photoThumb(photoId) }.getOrNull() ?: return
+        rememberThumb(photoId, bytes)
     }
 
     suspend fun saveEdit(original: CachedItem, draft: ItemDraft): String? = online {

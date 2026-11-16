@@ -3,6 +3,7 @@ package com.damy.pantry.ui
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -33,7 +34,8 @@ class CaptureShots {
     fun confirm() {
         show {
             ConfirmScreen(
-                OcrView.Confirm(LocalDate(2027, 3, 15), null, null, false, emptyList(), null, "ocr_expiry"),
+                OcrView.Confirm(LocalDate(2027, 3, 15), LocalDate(2026, 3, 15), null, false, emptyList(), null, "ocr_expiry"),
+                photo = samplePhoto(),
                 onBack = {},
                 onManual = {},
                 onNext = {},
@@ -55,12 +57,19 @@ class CaptureShots {
                     LocalDate(2027, 4, 3),
                     "ocr_expiry",
                 ),
+                photo = samplePhoto(),
                 onBack = {},
                 onManual = {},
                 onNext = {},
             )
         }
         capture("19-confirm-ambig")
+    }
+
+    @Test
+    fun shelfPicker() {
+        show { com.damy.pantry.capture.ShelfPickScreen(LocalDate(2026, 11, 15), onBack = {}, onDone = {}) }
+        capture("03-manual")
     }
 
     @Test
@@ -79,6 +88,12 @@ class CaptureShots {
     fun cameraDenied() {
         show { CameraDenied(onSettings = {}, onManual = {}) }
         capture("27-camera-denied")
+    }
+
+    private fun samplePhoto(): androidx.compose.ui.graphics.ImageBitmap {
+        val bitmap = Bitmap.createBitmap(80, 48, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.parseColor("#1E4A62"))
+        return bitmap.asImageBitmap()
     }
 
     private fun show(content: @androidx.compose.runtime.Composable () -> Unit) {

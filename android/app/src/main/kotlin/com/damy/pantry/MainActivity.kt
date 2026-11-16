@@ -160,9 +160,26 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
                 onRemoved = { nav.navigate("family") { popUpTo("home") { inclusive = true } } },
             )
         }
+        composable("shelf") {
+            com.damy.pantry.capture.ShelfPickScreen(shanghaiToday(), onBack = { nav.popBackStack() }, onDone = { prefill ->
+                com.damy.pantry.capture.PendingCapture.prefill = prefill
+                nav.navigate("form") { popUpTo("home") }
+            })
+        }
         composable("form") {
             val vm: ItemFormViewModel = viewModel(factory = repo.factory { ItemFormViewModel(repo) { shanghaiToday() } })
-            ItemFormScreen(vm, repo, null, onBack = { nav.popBackStack() }, onSaved = { nav.popBackStack() })
+            val scope = rememberCoroutineScope()
+            ItemFormScreen(vm, repo, null, onBack = { nav.popBackStack() }, onSaved = {
+                val jpeg = com.damy.pantry.capture.PendingCapture.jpeg
+                val created = vm.lastCreatedId
+                if (jpeg != null && created != null) {
+                    scope.launch {
+                        runCatching { repo.uploadPhoto(created, jpeg) }
+                        com.damy.pantry.capture.PendingCapture.jpeg = null
+                    }
+                }
+                nav.popBackStack()
+            })
         }
         composable("edit/{id}") { entry ->
             val id = entry.arguments?.getString("id")
@@ -185,7 +202,8 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
                 },
                 onManual = { prefill ->
                     com.damy.pantry.capture.PendingCapture.prefill = prefill
-                    nav.navigate("form") { popUpTo("home") }
+                    val route = if (prefill.manualMode == "shelf") "shelf" else "form"
+                    nav.navigate(route) { popUpTo("home") }
                 },
                 onBack = { nav.popBackStack() },
             )

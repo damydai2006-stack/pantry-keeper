@@ -455,7 +455,7 @@ private object Support {
             .setLocaleConfig("locale", "C")
             .setLocaleConfig("lc-messages", "C")
             .start()
-        testCode = "k" + UUID.randomUUID().toString().replace("-", "").take(8)
+        testCode = sixDigitCode()
         testToken = "t-" + UUID.randomUUID().toString().replace("-", "")
         clock = AdjustableClock(Clock.fixed(base, ZoneOffset.UTC)).also { it.adjustable = true }
         config = AppConfig.load(env(testClock = true))

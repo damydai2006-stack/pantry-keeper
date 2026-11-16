@@ -302,9 +302,9 @@ fun Application.module(
                 call.respondBytes(photo.bytes, io.ktor.http.ContentType.parse(photo.contentType))
             }
             get("/barcodes/{code}") {
-                call.requireSession(sessions, config)
+                val ctx = call.requireSession(sessions, config)
                 val code = call.parameters["code"] ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
-                call.respond(barcodes.lookup(code))
+                call.respond(barcodes.lookup(ctx.userId, code))
             }
             get("/sync") {
                 val ctx = call.requireSession(sessions, config)

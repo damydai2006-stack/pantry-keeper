@@ -180,15 +180,25 @@ class ItemFormViewModel(private val repo: PantryRepository, private val today: (
     val error = MutableStateFlow<String?>(null)
     val preview = MutableStateFlow("")
     var editing: CachedItem? = null
+    var lastCreatedId: String? = null
 
-    fun prefill(name: String, expiry: String?, production: String?, category: String?) {
+    fun prefill(name: String, expiry: String?, production: String?, category: String?, shelfValue: Int? = null, shelfUnit: String? = null, manualMode: String? = null) {
         this.name.value = name
         if (!category.isNullOrBlank()) this.category.value = category
-        if (!expiry.isNullOrBlank()) {
+        if (!production.isNullOrBlank()) productionText.value = production
+        if (manualMode == "date" || (manualMode != "shelf" && !expiry.isNullOrBlank())) {
+            useDate.value = true
+            expiryText.value = expiry.orEmpty()
+        } else if (shelfValue != null) {
+            chooseShelf(shelfValue, when (shelfUnit) {
+                "month" -> ShelfUnit.MONTH
+                "year" -> ShelfUnit.YEAR
+                else -> ShelfUnit.DAY
+            })
+        } else if (!expiry.isNullOrBlank()) {
             useDate.value = true
             expiryText.value = expiry
         }
-        if (!production.isNullOrBlank()) productionText.value = production
         refreshPreview()
     }
 
@@ -259,7 +269,7 @@ class ItemFormViewModel(private val repo: PantryRepository, private val today: (
                 )
                 val original = editing
                 val message = if (original == null) {
-                    repo.saveNew(draft)
+                    lastCreatedId = repo.saveNew(draft)
                     null
                 } else {
                     repo.saveEdit(original, draft)

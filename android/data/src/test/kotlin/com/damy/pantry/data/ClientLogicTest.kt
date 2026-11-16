@@ -188,6 +188,8 @@ private class FakeApi : PantryApi {
     }
 
     override suspend fun barcode(code: String) = BarcodeHit(found = false, reason = "not_found")
+    override suspend fun uploadPhoto(itemId: String, bytes: ByteArray) = item(itemId, "照片", 2)
+    override suspend fun photoThumb(photoId: String) = byteArrayOf()
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit = {}
     private fun family() = Family("f", "大米一家", "u", "AB2345", "2026-11-22T00:00:00Z", "admin")
 }
