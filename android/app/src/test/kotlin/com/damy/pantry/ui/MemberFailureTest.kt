@@ -84,6 +84,7 @@ private class MemberApi : PantryApi {
     override suspend fun login(phone: String, code: String) = error("unused")
     override suspend fun logout() = Unit
     override suspend fun me() = error("unused")
+    override suspend fun updateDisplayName(name: String) = error("unused")
     override suspend fun createFamily(name: String) = error("unused")
     override suspend fun joinFamily(code: String) = error("unused")
     override suspend fun leaveFamily() {
@@ -101,5 +102,8 @@ private class MemberApi : PantryApi {
     override suspend fun batch(ids: List<String>, action: String) = error("unused")
     override suspend fun undo(token: String) = error("unused")
     override suspend fun sync(since: Long) = error("unused")
+    override suspend fun barcode(code: String) = error("unused")
+    override suspend fun uploadPhoto(itemId: String, bytes: ByteArray) = error("unused")
+    override suspend fun photoThumb(photoId: String) = error("unused")
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit = {}
 }

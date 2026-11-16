@@ -32,15 +32,31 @@ class PantryRepository(
     val family = MutableStateFlow<Family?>(null)
     val online = MutableStateFlow(true)
     val notice = MutableStateFlow<String?>(null)
+    val thumbs = MutableStateFlow<Map<String, ByteArray>>(emptyMap())
     val events = MutableSharedFlow<AppEvent>(extraBufferCapacity = 16)
 
     @Volatile private var foreground = false
+    @Volatile private var networkUp = true
+    private val serverDown = MutableStateFlow(false)
     private var poll: Job? = null
     private var closeSocket: (() -> Unit)? = null
 
     fun setOnline(value: Boolean) {
-        online.value = value
-        if (value) notice.value = null
+        networkUp = value
+        online.value = value && !serverDown.value
+        if (!serverDown.value && value) notice.value = null
+    }
+
+    private fun markServerDown() {
+        serverDown.value = true
+        online.value = false
+        notice.value = "暂时连不上服务器"
+    }
+
+    private fun markServerUp() {
+        serverDown.value = false
+        notice.value = null
+        online.value = networkUp
     }
 
     fun restoreFromCache() {
@@ -59,8 +75,7 @@ class PantryRepository(
                 if (me.familyId == null) wipeFamilyCache() else pull()
             }
         } catch (_: java.io.IOException) {
-            setOnline(false)
-            notice.value = "暂时连不上服务器"
+            markServerDown()
         } catch (_: PantryCallException) {
             // 401 and not_in_family already wiped inside guard.
         }
@@ -70,12 +85,31 @@ class PantryRepository(
         if (foreground) return
         foreground = true
         poll = scope.launch {
+            var wait = 5_000L
             while (isActive && foreground) {
-                if (online.value && session.token != null) {
+                if (session.token != null && serverDown.value && networkUp) {
+                    val recovered = try {
+                        guard { api.me() }
+                        session.token != null
+                    } catch (_: java.io.IOException) {
+                        false
+                    } catch (_: PantryCallException) {
+                        false
+                    }
+                    if (recovered) {
+                        markServerUp()
+                        runCatching { pull() }
+                        wait = 5_000L
+                    } else {
+                        wait = (wait * 2).coerceAtMost(30_000L)
+                    }
+                } else if (online.value && session.token != null) {
                     ensureSocket()
-                    runCatching { pull() }
+                    val failed = runCatching { pull() }
+                    if (failed.exceptionOrNull() is java.io.IOException) markServerDown()
+                    wait = 5_000L
                 }
-                delay(5_000)
+                delay(wait)
             }
         }
     }
@@ -110,6 +144,8 @@ class PantryRepository(
         publish(emptyList())
         cache.setCursor(0)
         family.value = null
+        thumbs.value = emptyMap()
+        PendingPhoto.clear()
     }
 
     suspend fun createFamily(name: String): Family = online {
@@ -128,6 +164,13 @@ class PantryRepository(
         joined
     }
 
+    suspend fun updateDisplayName(name: String): Me = online {
+        FieldLimits.displayNameError(name)?.let { throw PantryCallException(400, "invalid_name", it) }
+        val me = api.updateDisplayName(name.trim())
+        session.displayName = me.displayName
+        me
+    }
+
     suspend fun renameFamily(name: String): Family = online {
         FieldLimits.familyNameError(name)?.let { throw PantryCallException(400, "invalid_name", it) }
         remember(api.renameFamily(name.trim()))
@@ -144,10 +187,28 @@ class PantryRepository(
         wipeFamilyCache()
     }
 
-    suspend fun saveNew(draft: ItemDraft) = online {
+    suspend fun saveNew(draft: ItemDraft): String = online {
         validate(draft)
-        api.createItem(draft, today().toString())
+        val created = api.createItem(draft, today().toString())
         pull()
+        created.id
+    }
+
+    suspend fun uploadPhoto(itemId: String, bytes: ByteArray): CachedItem = online {
+        val saved = api.uploadPhoto(itemId, bytes)
+        saved.photoId?.let { rememberThumb(it, bytes) }
+        pull()
+        saved
+    }
+
+    fun rememberThumb(photoId: String, bytes: ByteArray) {
+        thumbs.value = thumbs.value + (photoId to bytes)
+    }
+
+    suspend fun ensureThumb(photoId: String) {
+        if (photoId in thumbs.value || session.token == null) return
+        val bytes = runCatching { api.photoThumb(photoId) }.getOrNull() ?: return
+        rememberThumb(photoId, bytes)
     }
 
     suspend fun saveEdit(original: CachedItem, draft: ItemDraft): String? = online {
@@ -170,6 +231,8 @@ class PantryRepository(
         pull()
         result
     }
+
+    suspend fun barcode(code: String) = api.barcode(code)
 
     suspend fun pull() {
         if (!online.value || session.token == null) return
@@ -255,6 +318,8 @@ class PantryRepository(
         session.saveFamily(null)
         items.value = emptyList()
         family.value = null
+        thumbs.value = emptyMap()
+        PendingPhoto.clear()
     }
 
     private fun validate(draft: ItemDraft) {

@@ -102,15 +102,15 @@ class ClientLogicTest {
         val vm = LoginViewModel(repo)
         assertFalse(vm.canLogin())
         vm.phone.value = "13" + "8" + "0".repeat(8)
-        vm.code.value = "k23456"
+        vm.code.value = "123456"
         assertFalse(vm.canLogin())
         vm.agreed.value = true
         assertTrue(vm.canLogin())
-        vm.code.value = "k23456789"
-        assertTrue(vm.canLogin())
-        vm.code.value = ""
+        vm.code.value = "12345"
         assertFalse(vm.canLogin())
         vm.code.value = "k23456"
+        assertFalse(vm.canLogin())
+        vm.code.value = "123456"
         vm.agreed.value = false
         vm.requestCode()
         advanceTimeBy(1)
@@ -165,6 +165,7 @@ private class FakeApi : PantryApi {
     override suspend fun login(phone: String, code: String) = LoginResult("u", "用户", "token")
     override suspend fun logout() = Unit
     override suspend fun me() = Me("u", "用户", "09:00", "f")
+    override suspend fun updateDisplayName(name: String) = Me("u", name, "09:00", "f")
     override suspend fun createFamily(name: String) = family()
     override suspend fun joinFamily(code: String) = family()
     override suspend fun leaveFamily() = Unit
@@ -186,6 +187,9 @@ private class FakeApi : PantryApi {
         } else page
     }
 
+    override suspend fun barcode(code: String) = BarcodeHit(found = false, reason = "not_found")
+    override suspend fun uploadPhoto(itemId: String, bytes: ByteArray) = item(itemId, "照片", 2)
+    override suspend fun photoThumb(photoId: String) = byteArrayOf()
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit = {}
     private fun family() = Family("f", "大米一家", "u", "AB2345", "2026-11-22T00:00:00Z", "admin")
 }

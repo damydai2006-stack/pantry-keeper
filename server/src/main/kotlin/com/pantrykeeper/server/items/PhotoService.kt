@@ -13,6 +13,7 @@ import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.time.Clock
 import java.time.OffsetDateTime
@@ -67,13 +68,31 @@ class PhotoService(
         val ext = if (kind == "webp") "webp" else "jpg"
         val main = dir.resolve("$photoId.$ext")
         val thumb = dir.resolve("$photoId.thumb.jpg")
-        Files.write(main, bytes)
-        val thumbBytes = writeThumb(bytes, thumb)
+        val tmpMain = dir.resolve("$photoId.$ext.part")
+        val tmpThumb = dir.resolve("$photoId.thumb.jpg.part")
+        Files.write(tmpMain, bytes)
+        val thumbBytes = writeThumb(bytes, tmpThumb)
         val total = bytes.size + (thumbBytes?.size ?: 0)
         val saved = try {
             transaction {
                 queryOne("select id from families where id = ? for update", { it.setObject(1, family.toJava()) }) { it.getObject(1) }
-                if (previous != null) deleteStored(previous, family)
+                    ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
+                val owned = queryOne(
+                    "select photo_id from items where id = ? and family_id = ? for update",
+                    {
+                        it.setObject(1, itemId.toJava())
+                        it.setObject(2, family.toJava())
+                    },
+                ) { rs -> rs.getObject(1, java.util.UUID::class.java)?.toKotlin() ?: Uuid.NIL }
+                    ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
+                Files.move(tmpMain, main, StandardCopyOption.REPLACE_EXISTING)
+                if (thumbBytes != null) {
+                    Files.move(tmpThumb, thumb, StandardCopyOption.REPLACE_EXISTING)
+                } else {
+                    Files.deleteIfExists(tmpThumb)
+                }
+                val replaced = owned.takeUnless { it == Uuid.NIL } ?: previous
+                if (replaced != null) deleteStored(replaced, family)
                 val now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC)
                 val rev = queryOne("select nextval('item_rev_seq')", {}) { it.getLong(1) }!!
                 update(
@@ -89,7 +108,7 @@ class PhotoService(
                     it.setObject(8, userId.toJava())
                     it.setObject(9, now)
                 }
-                update("update items set photo_id = ?, updated_by = ?, updated_at = ?, rev = ? where id = ? and family_id = ?") {
+                val updated = update("update items set photo_id = ?, updated_by = ?, updated_at = ?, rev = ? where id = ? and family_id = ?") {
                     it.setObject(1, photoId.toJava())
                     it.setObject(2, userId.toJava())
                     it.setObject(3, now)
@@ -97,9 +116,12 @@ class PhotoService(
                     it.setObject(5, itemId.toJava())
                     it.setObject(6, family.toJava())
                 }
+                if (updated == 0) throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
                 rev
             }
         } catch (e: Exception) {
+            Files.deleteIfExists(tmpMain)
+            Files.deleteIfExists(tmpThumb)
             Files.deleteIfExists(main)
             Files.deleteIfExists(thumb)
             throw e

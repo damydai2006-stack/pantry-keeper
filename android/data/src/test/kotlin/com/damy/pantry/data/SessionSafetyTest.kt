@@ -16,7 +16,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.datetime.LocalDate
@@ -148,12 +150,152 @@ class SessionSafetyTest {
     }
 
     @Test
+    fun unreachableServerRetriesAndComesBackOnline() = runTest(dispatcher) {
+        val api = ScriptApi()
+        val cache = MemoryCache()
+        val repo = repo(api, cache)
+        cache.replace(listOf(item("a", "A家药", 3)))
+        repo.session.token = "token-a"
+        api.meError = IOException("pantry.example")
+        repo.boot()
+        assertFalse(repo.online.value)
+        assertEquals("暂时连不上服务器", repo.notice.value)
+        api.meError = null
+        repo.startForeground()
+        runCurrent()
+        assertTrue(repo.online.value)
+        assertNull(repo.notice.value)
+        assertEquals(listOf("A家药"), repo.items.value.map { it.name })
+        repo.stopForeground()
+    }
+
+    @Test
+    fun unreachableServerBacksOffBeforeTheNextProbe() = runTest(dispatcher) {
+        val api = ScriptApi()
+        val repo = repo(api, MemoryCache())
+        repo.session.token = "token-a"
+        api.meError = IOException("pantry.example")
+        repo.boot()
+        assertEquals(1, api.meCalls)
+        repo.startForeground()
+        runCurrent()
+        assertEquals(2, api.meCalls)
+        advanceTimeBy(9_999)
+        assertEquals(2, api.meCalls)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(3, api.meCalls)
+        assertFalse(repo.online.value)
+        repo.stopForeground()
+    }
+
+    @Test
+    fun pendingPhotoDoesNotAttachToTheNextItem() {
+        PendingPhoto.clear()
+        PendingPhoto.storeCapture("cap-a", byteArrayOf(1, 2, 3))
+        PendingPhoto.abandon("cap-a")
+        assertNull(PendingPhoto.bytesFor("item-b"))
+        assertNull(PendingPhoto.bytesFor("cap-a"))
+        val capB = PendingPhoto.beginCapture()
+        assertNull(PendingPhoto.bytesFor(capB))
+        assertNull(PendingPhoto.bytesFor("item-b"))
+    }
+
+    @Test
+    fun failedUploadStaysWithItsItemWhenAnotherCaptureStarts() {
+        PendingPhoto.clear()
+        PendingPhoto.storeCapture("cap-a", byteArrayOf(4, 4))
+        val taken = PendingPhoto.takeCapture("cap-a")
+        assertTrue(taken!!.contentEquals(byteArrayOf(4, 4)))
+        PendingPhoto.holdForItem("item-a", taken)
+        val capB = PendingPhoto.beginCapture()
+        assertNull(PendingPhoto.bytesFor(capB))
+        assertNull(PendingPhoto.bytesFor("item-b"))
+        assertNull(PendingPhoto.takeCapture(capB))
+        assertTrue(PendingPhoto.bytesFor("item-a")!!.contentEquals(byteArrayOf(4, 4)))
+        PendingPhoto.clear()
+    }
+
+    @Test
+    fun logoutAndInvalidSessionDropThePendingPhotoAndThumbs() = runTest(dispatcher) {
+        val api = ScriptApi()
+        val cache = MemoryCache()
+        val repo = repo(api, cache)
+        repo.session.token = "token-a"
+        cache.replace(listOf(item("a", "A家药", 3)))
+        repo.restoreFromCache()
+        PendingPhoto.clear()
+        PendingPhoto.storeCapture("cap", byteArrayOf(7, 7))
+        repo.rememberThumb("p", byteArrayOf(8))
+        repo.logout()
+        assertNull(PendingPhoto.bytesFor("cap"))
+        assertTrue(repo.thumbs.value.isEmpty())
+
+        PendingPhoto.storeCapture("cap", byteArrayOf(7, 7))
+        repo.rememberThumb("p", byteArrayOf(8))
+        repo.session.token = "token-a"
+        api.syncHandler = { throw PantryCallException(401, "unauthorized", "登录已失效") }
+        assertFailsWith<PantryCallException> { repo.pull() }
+        assertNull(PendingPhoto.bytesFor("cap"))
+        assertTrue(repo.thumbs.value.isEmpty())
+
+        PendingPhoto.holdForItem("item-a", byteArrayOf(4, 4))
+        repo.session.token = "token-a"
+        api.syncHandler = { throw PantryCallException(403, "not_in_family", "不在家庭中") }
+        assertFailsWith<PantryCallException> { repo.pull() }
+        assertNull(PendingPhoto.bytesFor("item-a"))
+
+        PendingPhoto.storeCapture("cap", byteArrayOf(5, 5))
+        repo.handleSocket("""{"t":"session_revoked"}""")
+        assertNull(PendingPhoto.bytesFor("cap"))
+    }
+
+    @Test
+    fun displayNameUpdateReplacesTheDefault() = runTest(dispatcher) {
+        val api = ScriptApi()
+        val repo = repo(api, MemoryCache())
+        repo.session.token = "token"
+        repo.session.displayName = "用户"
+        val me = repo.updateDisplayName("小米")
+        assertEquals("小米", me.displayName)
+        assertEquals("小米", repo.session.displayName)
+        assertFailsWith<PantryCallException> { repo.updateDisplayName(" ") }
+    }
+
+    @Test
     fun limitsCountCodePoints() {
         val emoji = "😀"
         assertEquals(emoji + emoji, FieldLimits.takeCodePoints(emoji.repeat(3), 2))
         val clipped = FieldLimits.takeCodePoints(emoji.repeat(3), 2)
         assertEquals(2, clipped.codePointCount(0, clipped.length))
         assertEquals(4, clipped.length)
+    }
+
+    @Test
+    fun keystoreFailureFallsBackToAFreshLogin() {
+        var attempts = 0
+        var deleted = false
+        val opened = openSession(
+            load = {
+                attempts += 1
+                error("keystore down")
+            },
+            deleteAlias = { deleted = true },
+        )
+        assertEquals(2, attempts)
+        assertTrue(deleted)
+        assertTrue(opened.session is MemorySession)
+        assertEquals("安全存储不可用，请重新登录", opened.message)
+        var second = 0
+        val recovered = openSession(
+            load = {
+                second += 1
+                if (second == 1) error("once") else MemorySession()
+            },
+            deleteAlias = {},
+        )
+        assertEquals(2, second)
+        assertNull(recovered.message)
     }
 
     @Test
@@ -183,6 +325,7 @@ private class ScriptApi : PantryApi {
     var syncHandler: suspend (Long) -> SyncPage = { SyncPage() }
     var meResult = Me("u", "用户", "09:00", "f")
     var meError: Exception? = null
+    var meCalls = 0
     var loginResult = LoginResult("u", "用户", "token")
     var undoResult = UndoOutcome(0, 1, null)
     var undoError: Exception? = null
@@ -190,7 +333,9 @@ private class ScriptApi : PantryApi {
     override suspend fun requestCode(phone: String) = Unit
     override suspend fun login(phone: String, code: String) = loginResult
     override suspend fun logout() = Unit
+    override suspend fun updateDisplayName(name: String) = meResult.copy(displayName = name)
     override suspend fun me(): Me {
+        meCalls += 1
         meError?.let { throw it }
         return meResult
     }
@@ -210,6 +355,9 @@ private class ScriptApi : PantryApi {
         return undoResult
     }
     override suspend fun sync(since: Long): SyncPage = syncHandler(since)
+    override suspend fun barcode(code: String) = BarcodeHit(found = false, reason = "not_found")
+    override suspend fun uploadPhoto(itemId: String, bytes: ByteArray) = error("unused")
+    override suspend fun photoThumb(photoId: String) = error("unused")
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit = {}
     private fun family() = Family("f", "大米一家", "u", "AB2345", "2026-11-22T00:00:00Z", "admin")
 }

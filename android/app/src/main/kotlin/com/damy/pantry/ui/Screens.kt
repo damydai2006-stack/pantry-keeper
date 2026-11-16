@@ -13,6 +13,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -38,6 +42,8 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -128,9 +134,9 @@ fun LoginScreen(vm: LoginViewModel, onFamily: () -> Unit, onHome: () -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = code,
-                onValueChange = { vm.code.value = FieldLimits.takeCodePoints(it, 64) },
+                onValueChange = { vm.code.value = it.filter(Char::isDigit).take(6) },
                 modifier = Modifier.weight(1f).testTag("login_code"),
-                placeholder = { Text("验证码") },
+                placeholder = { Text("6 位验证码") },
                 singleLine = true,
             )
             Spacer(Modifier.width(8.dp))
@@ -142,7 +148,7 @@ fun LoginScreen(vm: LoginViewModel, onFamily: () -> Unit, onHome: () -> Unit) {
         }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("login_agree").clickable { vm.agreed.value = !agreed }) {
             Checkbox(checked = agreed, onCheckedChange = { vm.agreed.value = it })
-            Text("我已阅读并同意《用户协议》和《隐私政策》", fontSize = 16.sp)
+            Text(keepPhrases("我已阅读并同意《用户协议》和《隐私政策》"), fontSize = 16.sp, maxLines = 2)
         }
         if (!agreed || error != null) {
             Text(error ?: "请先勾选用户协议和隐私政策", color = Danger, fontSize = 16.sp)
@@ -173,6 +179,37 @@ fun FamilyChooseScreen(onCreate: () -> Unit, onJoin: () -> Unit, onLogout: () ->
 }
 
 @Composable
+fun NicknameScreen(repo: PantryRepository, onBack: () -> Unit, onSaved: () -> Unit) {
+    var name by remember { mutableStateOf(repo.session.displayName?.takeIf { it.isNotBlank() && it != "用户" }.orEmpty()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    Column(Modifier.fillMaxSize().background(Bg).padding(20.dp)) {
+        TopBar("昵称", onBack)
+        Text("这个名字会显示在家庭成员列表里。", color = TextSecondary, fontSize = 16.sp)
+        OutlinedTextField(
+            name,
+            { name = FieldLimits.takeCodePoints(it, FieldLimits.DISPLAY_NAME_MAX) },
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp).testTag("nickname"),
+            placeholder = { Text("1 到 20 个字") },
+            singleLine = true,
+        )
+        error?.let { Text(it, color = Danger, fontSize = 16.sp, modifier = Modifier.testTag("nickname_error")) }
+        Button(
+            onClick = {
+                scope.launch {
+                    runCatching { repo.updateDisplayName(name) }
+                        .onSuccess { onSaved() }
+                        .onFailure { error = userFacingMessage(it) }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().padding(top = 16.dp).heightIn(min = 48.dp).testTag("nickname_save"),
+            shape = button,
+            colors = ButtonDefaults.buttonColors(containerColor = Brand),
+        ) { Text("保存") }
+    }
+}
+
+@Composable
 fun FamilyCreateScreen(repo: PantryRepository, onBack: () -> Unit, onDone: () -> Unit) {
     var name by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
@@ -197,7 +234,7 @@ fun FamilyCreateScreen(repo: PantryRepository, onBack: () -> Unit, onDone: () ->
             Button(
                 onClick = {
                     scope.launch {
-                        runCatching { repo.createFamily(name) }.onSuccess { created = it }.onFailure { error = it.message }
+                        runCatching { repo.createFamily(name) }.onSuccess { created = it }.onFailure { error = userFacingMessage(it) }
                     }
                 },
                 enabled = repo.online.collectAsState().value,
@@ -239,7 +276,7 @@ fun FamilyJoinScreen(repo: PantryRepository, onBack: () -> Unit, onDone: () -> U
         Button(
             onClick = {
                 scope.launch {
-                    runCatching { repo.joinFamily(code) }.onSuccess { onDone() }.onFailure { error = it.message ?: "邀请码无效，请核对后再试" }
+                    runCatching { repo.joinFamily(code) }.onSuccess { onDone() }.onFailure { error = userFacingMessage(it) }
                 }
             },
             modifier = Modifier.fillMaxWidth().padding(top = 16.dp).heightIn(min = 48.dp).testTag("join_submit"),
@@ -258,9 +295,11 @@ fun HomeScreen(
     onAddManual: () -> Unit,
     onEdit: (String) -> Unit,
     onStub: (String) -> Unit,
+    onCapture: (String) -> Unit,
     onMembers: () -> Unit,
     onLogout: () -> Unit,
     onRemoved: () -> Unit,
+    onNickname: () -> Unit = {},
 ) {
     var tab by remember { mutableStateOf("list") }
     var sheet by remember { mutableStateOf(false) }
@@ -291,7 +330,7 @@ fun HomeScreen(
                 "list" -> ListPage(repo, listVm, today, online, onEdit) { if (online) sheet = true else listVm.hint.value = "恢复网络后再修改" }
                 "remind" -> StubBody("提醒", "提醒清单将在后续版本接入。分组仍是已过期、7 天内（含今天）、8–30 天和更远。")
                 "history" -> HistoryPage(repo, historyVm, online)
-                else -> MinePage(repo, online, onMembers, onStub) {
+                else -> MinePage(repo, online, onMembers, onStub, onNickname) {
                     scope.launch {
                         repo.logout()
                         onLogout()
@@ -305,7 +344,7 @@ fun HomeScreen(
                 Modifier.fillMaxWidth().background(Text).padding(horizontal = 16.dp, vertical = 8.dp).testTag("undo_bar"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(bar.text(), color = Surface, modifier = Modifier.weight(1f), fontSize = 16.sp)
+                Text(keepPhrases(bar.text()), color = Surface, modifier = Modifier.weight(1f), fontSize = 16.sp, maxLines = 2)
                 Text(undoCountdown(bar.seconds), color = Surface, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 8.dp))
                 TextButton(onClick = { listVm.undo() }, modifier = Modifier.heightIn(min = 48.dp).testTag("undo_button")) { Text("撤销", color = Surface, fontWeight = FontWeight.Bold) }
             }
@@ -324,27 +363,13 @@ fun HomeScreen(
         }
     }
     if (sheet) {
-        AlertDialog(
-            onDismissRequest = { sheet = false },
-            title = { Text("入库") },
-            text = {
-                Column {
-                    SheetRow("扫条形码", "查到名称就自动带出", online, "sheet_scan") {
-                        sheet = false
-                        onStub("scan")
-                    }
-                    SheetRow("拍包装照片", "识别生产日期、保质期或到期日", online, "sheet_photo") {
-                        sheet = false
-                        onStub("photo")
-                    }
-                    SheetRow("手动填写", "手选保质期或直接选到期日", true, "sheet_manual") {
-                        sheet = false
-                        onAddManual()
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { sheet = false }) { Text("取消") } },
-        )
+        InboundSheet(online, onDismiss = { sheet = false }, onCapture = {
+            sheet = false
+            onCapture(it)
+        }, onManual = {
+            sheet = false
+            onAddManual()
+        })
     }
     val toastText by listVm.toast.collectAsState()
     LaunchedEffect(toastText) { toastText?.let { toast(context, it); listVm.toast.value = null } }
@@ -354,6 +379,7 @@ fun HomeScreen(
 
 @Composable
 private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate, online: Boolean, onEdit: (String) -> Unit, onAdd: () -> Unit) {
+    val scope = rememberCoroutineScope()
     val items by repo.items.collectAsState()
     val query by vm.query.collectAsState()
     val selecting by vm.selecting.collectAsState()
@@ -363,6 +389,10 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
     val notice by repo.notice.collectAsState()
     val groups = groupItems(today, items.filter { it.status == "in_stock" }, query)
     val stock = items.filter { it.status == "in_stock" }
+    val thumbs by repo.thumbs.collectAsState()
+    LaunchedEffect(stock.map { it.photoId }) {
+        stock.mapNotNull { it.photoId }.distinct().forEach { repo.ensureThumb(it) }
+    }
     val expired = stock.count { ReminderRules.daysRemaining(today, LocalDate.parse(it.expiryDate)) < 0 }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -375,6 +405,25 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
                 if (!online) OfflineBanner(notice)
+                com.damy.pantry.data.PendingPhoto.itemIds().forEach { retryId ->
+                    val bytes = com.damy.pantry.data.PendingPhoto.bytesFor(retryId)
+                    if (bytes != null) {
+                        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("照片未上传，可在编辑页重试", modifier = Modifier.weight(1f), color = Danger, fontSize = 16.sp)
+                            TextButton(onClick = {
+                                scope.launch {
+                                    val prepared = runCatching { com.damy.pantry.capture.compressForUpload(bytes) }.getOrElse {
+                                        repo.notice.value = "照片未上传，可在编辑页重试"
+                                        return@launch
+                                    }
+                                    runCatching { repo.uploadPhoto(retryId, prepared) }
+                                        .onSuccess { com.damy.pantry.data.PendingPhoto.remove(retryId); vm.toast.value = "照片已上传" }
+                                        .onFailure { repo.notice.value = "照片未上传，可在编辑页重试" }
+                                }
+                            }, modifier = Modifier.heightIn(min = 48.dp).testTag("retry_photo")) { Text("重试") }
+                        }
+                    }
+                }
                 NotificationOffBanner()
                 hint?.let { Text(it, color = Danger, fontSize = 16.sp) }
                 OutlinedTextField(query, { vm.query.value = it }, modifier = Modifier.fillMaxWidth().testTag("list_search"), placeholder = { Text("搜索物品名称") }, singleLine = true)
@@ -389,7 +438,7 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
                 groups.forEach { group ->
                     Text("${group.title} ${group.items.size}件", fontWeight = FontWeight.Bold, color = bucketColor(group.bucket), modifier = Modifier.padding(top = 12.dp, bottom = 8.dp))
                     group.items.forEach { item ->
-                        ItemCard(item, today, selecting, item.id in selected, { if (selecting) vm.toggle(item.id) else onEdit(item.id) }, { vm.toggle(item.id) })
+                        ItemCard(item, today, selecting, item.id in selected, thumbs[item.photoId], { if (selecting) vm.toggle(item.id) else onEdit(item.id) }, { vm.toggle(item.id) })
                     }
                 }
                 Spacer(Modifier.height(88.dp))
@@ -410,7 +459,7 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
 }
 
 @Composable
-private fun ItemCard(item: CachedItem, today: LocalDate, selecting: Boolean, checked: Boolean, onClick: () -> Unit, onCheck: () -> Unit) {
+private fun ItemCard(item: CachedItem, today: LocalDate, selecting: Boolean, checked: Boolean, thumb: ByteArray?, onClick: () -> Unit, onCheck: () -> Unit) {
     val expiry = LocalDate.parse(item.expiryDate)
     val days = ReminderRules.daysRemaining(today, expiry)
     val bucket = com.damy.pantry.data.listBucket(today, expiry)
@@ -420,13 +469,24 @@ private fun ItemCard(item: CachedItem, today: LocalDate, selecting: Boolean, che
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.width(6.dp).height(88.dp).background(bucketColor(bucket)))
+        run {
+            val bitmap = remember(thumb) { thumb?.let { BitmapFactory.decodeByteArray(it, 0, it.size) } }
+            Box(
+                Modifier.padding(start = 12.dp).size(56.dp).clip(RoundedCornerShape(12.dp)).background(Surface2).testTag("thumb_${item.name}"),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = item.name, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                else Text(item.name.take(1).ifBlank { "物" }, color = TextTertiary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+        }
         if (selecting) {
             Checkbox(checked = checked, onCheckedChange = { onCheck() }, modifier = Modifier.testTag("check_${item.name}").size(48.dp))
         }
         Column(Modifier.weight(1f).padding(12.dp)) {
             Text(item.name, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Text("${categoryLabel(item.category)} · ${item.location ?: "未填位置"} · ×${item.quantity}", fontSize = 16.sp, color = TextSecondary)
-            Text("$expiry · $label", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text("$expiry", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text(keepPhrases(label), fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
         Row(
             Modifier.padding(end = 12.dp).clip(RoundedCornerShape(50)).background(bucketSoft(bucket)).padding(horizontal = 8.dp, vertical = 4.dp),
@@ -441,14 +501,38 @@ private fun ItemCard(item: CachedItem, today: LocalDate, selecting: Boolean, che
 @Composable
 fun ItemFormScreen(vm: ItemFormViewModel, repo: PantryRepository, id: String?, onBack: () -> Unit, onSaved: (String?) -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val items by repo.items.collectAsState()
     LaunchedEffect(id, items) {
+        val pending = com.damy.pantry.capture.PendingCapture.prefill
+        if (pending != null && id == null) {
+            com.damy.pantry.capture.PendingCapture.prefill = null
+            vm.prefill(pending.name, pending.expiry, pending.production, pending.category, pending.shelfValue, pending.shelfUnit, pending.manualMode)
+        }
         if (id != null && vm.editing == null) vm.load(items.firstOrNull { it.id == id })
     }
-    FormBody(vm, id != null, onBack) { message ->
-        if (message != null) toast(context, message)
-        else if (id == null) toast(context, "已入库")
-        onSaved(message)
+    Column(Modifier.fillMaxSize()) {
+        val retryBytes = if (id == null) null else com.damy.pantry.data.PendingPhoto.bytesFor(id)
+        if (id != null && retryBytes != null) {
+            Button(onClick = {
+                scope.launch {
+                    val prepared = runCatching { com.damy.pantry.capture.compressForUpload(retryBytes) }.getOrElse {
+                        toast(context, "照片未上传，可在编辑页重试")
+                        return@launch
+                    }
+                    runCatching { repo.uploadPhoto(id, prepared) }
+                        .onSuccess { com.damy.pantry.data.PendingPhoto.remove(id); toast(context, "照片已上传") }
+                        .onFailure { toast(context, "照片未上传，可在编辑页重试") }
+                }
+            }, modifier = Modifier.padding(horizontal = 20.dp).heightIn(min = 48.dp).testTag("retry_photo_edit")) { Text("重新上传照片") }
+        }
+        Box(Modifier.weight(1f)) {
+            FormBody(vm, id != null, onBack) { message ->
+                if (message != null) toast(context, message)
+                else if (id == null) toast(context, "已入库")
+                onSaved(message)
+            }
+        }
     }
 }
 
@@ -601,12 +685,14 @@ private fun HistoryPage(repo: PantryRepository, vm: HistoryViewModel, online: Bo
 }
 
 @Composable
-private fun MinePage(repo: PantryRepository, online: Boolean, onMembers: () -> Unit, onStub: (String) -> Unit, onLogout: () -> Unit) {
+private fun MinePage(repo: PantryRepository, online: Boolean, onMembers: () -> Unit, onStub: (String) -> Unit, onNickname: () -> Unit, onLogout: () -> Unit) {
     val family by repo.family.collectAsState()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Text("我的", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text(repo.session.phoneMask.orEmpty().ifEmpty { "已登录" }, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
         Text(repo.session.displayName ?: "用户", color = TextSecondary)
+        com.damy.pantry.capture.MateDiagnostics.Entry()
+        Choice(repo.session.displayName?.takeIf { it.isNotBlank() && it != "用户" } ?: "设置昵称", "家庭成员看到的名字", onNickname, "mine_nickname")
         Choice(family?.name ?: "家庭", "查看成员和邀请码", onMembers, "mine_family")
         Choice("每天 09:00", "提醒设置将在后续版本接入", { onStub("remind-time") }, "mine_remind")
         val context = LocalContext.current
@@ -724,7 +810,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
         "remove" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("移除成员") },
-            text = { Text("确定将${target?.visibleName()}移出「${current?.name}」？移出后对方将立即看不到该家庭的物品。") },
+            text = { Text(keepPhrases("确定将${target?.visibleName()}移出「${current?.name}」？移出后对方将立即看不到该家庭的物品。")) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -739,7 +825,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
         "admin" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("设为管理员") },
-            text = { Text("确定将${target?.visibleName()}设为管理员？转让后你将变为普通成员。") },
+            text = { Text(keepPhrases("确定将${target?.visibleName()}设为管理员？转让后你将变为普通成员。")) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -754,7 +840,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
         "leave-member" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("退出家庭？") },
-            text = { Text("退出后将不能再看到该家庭的物品。邀请码有效期内可再加入。") },
+            text = { Text(keepPhrases("退出后将不能再看到该家庭的物品。邀请码有效期内可再加入。")) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -769,7 +855,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
         "leave-last" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("退出家庭？") },
-            text = { Text("你是最后一名成员。家庭将保留 30 天后删除。保留期内不可再加入，邀请码将失效。") },
+            text = { Text(keepPhrases("你是最后一名成员。家庭将保留 30 天后删除。保留期内不可再加入，邀请码将失效。")) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -786,14 +872,14 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
             title = { Text("须先转让管理员") },
             text = {
                 Column {
-                    Text("还有其他成员时不能直接退出。请选择接任的管理员，默认已选最早加入的人。")
+                    Text(keepPhrases("还有其他成员时不能直接退出。请选择接任的管理员，默认已选最早加入的人。"))
                     current?.members?.filter { it.userId != repo.session.userId }?.forEach { member ->
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { successor = member }) {
                             RadioButton(selected = successor?.userId == member.userId, onClick = { successor = member })
                             Text("${member.visibleName()} · ${member.joinedLabel()}")
                         }
                     }
-                    Text("退出后将不能再看到该家庭的物品。邀请码有效期内可再加入。")
+                    Text(keepPhrases("退出后将不能再看到该家庭的物品。邀请码有效期内可再加入。"))
                 }
             },
             confirmButton = {
@@ -849,13 +935,13 @@ private fun BatchBar(vm: ListViewModel) {
     Row(Modifier.fillMaxWidth().background(Surface).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Action("已用完", "batch_used", selected.isNotEmpty()) { vm.mark("used_up") }
         Action("已处理", "batch_discard", selected.isNotEmpty()) { vm.mark("discarded") }
-        Action("删除", "batch_delete", selected.isNotEmpty()) { confirm = true }
+        Action("删除", "batch_delete", selected.isNotEmpty(), danger = true) { confirm = true }
     }
     if (confirm) {
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text("确定删除？") },
-            text = { Text("删除后无法恢复，也不会进入历史。确定删除这 ${selected.size} 件物品吗？需要可恢复请改用「已用完 / 已处理」。") },
+            text = { Text(keepPhrases("删除后无法恢复，也不会进入历史。确定删除这 ${selected.size} 件物品吗？需要可恢复请改用「已用完 / 已处理」。")) },
             confirmButton = { TextButton(onClick = { confirm = false; vm.confirmDelete() }, modifier = Modifier.testTag("confirm_delete")) { Text("删除", color = Danger) } },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("取消") } },
         )
@@ -868,22 +954,42 @@ private fun HistoryBar(vm: HistoryViewModel) {
     val selected by vm.selected.collectAsState()
     Row(Modifier.fillMaxWidth().background(Surface).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Action("恢复", "history_restore", selected.isNotEmpty()) { vm.restore(selected.toList()) }
-        Action("永久删除", "history_delete", selected.isNotEmpty()) { confirm = true }
+        Action("永久删除", "history_delete", selected.isNotEmpty(), danger = true) { confirm = true }
     }
     if (confirm) {
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text("确定删除？") },
-            text = { Text("删除后永久无法恢复，不会留在历史。确定删除这 ${selected.size} 件吗？") },
+            text = { Text(keepPhrases("删除后永久无法恢复，不会留在历史。确定删除这 ${selected.size} 件吗？")) },
             confirmButton = { TextButton(onClick = { confirm = false; vm.delete(selected.toList()) }) { Text("删除", color = Danger) } },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("取消") } },
         )
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RowScope.Action(label: String, tag: String, enabled: Boolean, onClick: () -> Unit) {
-    Button(onClick = onClick, enabled = enabled, modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag(tag), shape = button) { Text(label) }
+private fun InboundSheet(online: Boolean, onDismiss: () -> Unit, onCapture: (String) -> Unit, onManual: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+            Text("入库", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            SheetRow("扫条形码", "查到名称就自动带出", online, "sheet_scan") { onCapture("scan") }
+            SheetRow("拍包装照片", "识别生产日期、保质期或到期日", online, "sheet_photo") { onCapture("photo") }
+            SheetRow("手动填写", "手选保质期或直接选到期日", true, "sheet_manual") { onManual() }
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun RowScope.Action(label: String, tag: String, enabled: Boolean, danger: Boolean = false, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag(tag),
+        shape = button,
+        colors = ButtonDefaults.buttonColors(containerColor = if (danger) Danger else Brand, contentColor = Surface),
+    ) { Text(label, maxLines = 1, softWrap = false) }
 }
 
 @Composable
@@ -937,7 +1043,7 @@ private fun NotificationOffBanner() {
         Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(12.dp)).background(BrandSoft).padding(start = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("未开启通知，可能错过到期提醒。", modifier = Modifier.weight(1f), color = Text, fontSize = 16.sp)
+        Text(keepPhrases("未开启通知，可能错过到期提醒。"), modifier = Modifier.weight(1f), color = Text, fontSize = 16.sp, maxLines = 2)
         TextButton(
             onClick = {
                 val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
@@ -946,6 +1052,16 @@ private fun NotificationOffBanner() {
             },
             modifier = Modifier.heightIn(min = 48.dp).testTag("open_notification_settings"),
         ) { Text("去设置") }
+    }
+}
+
+private fun Char.isCjk(): Boolean = code in 0x4E00..0x9FFF
+
+/** Keep a Chinese word on one line, and still allow a break after punctuation or a space. */
+internal fun keepPhrases(text: String): String = buildString {
+    text.forEachIndexed { index, ch ->
+        if (index > 0 && ch.isCjk() && text[index - 1].isCjk()) append('\u2060')
+        append(ch)
     }
 }
 

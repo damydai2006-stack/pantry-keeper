@@ -26,6 +26,7 @@ interface PantryApi {
     suspend fun login(phone: String, code: String): LoginResult
     suspend fun logout()
     suspend fun me(): Me
+    suspend fun updateDisplayName(name: String): Me
     suspend fun createFamily(name: String): Family
     suspend fun joinFamily(code: String): Family
     suspend fun leaveFamily()
@@ -39,8 +40,19 @@ interface PantryApi {
     suspend fun batch(ids: List<String>, action: String): BatchOutcome
     suspend fun undo(token: String): UndoOutcome
     suspend fun sync(since: Long): SyncPage
+    suspend fun barcode(code: String): BarcodeHit
+    suspend fun uploadPhoto(itemId: String, bytes: ByteArray): CachedItem
+    suspend fun photoThumb(photoId: String): ByteArray
     fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit
 }
+
+@Serializable
+data class BarcodeHit(
+    val found: Boolean = false,
+    val name: String? = null,
+    val defaultCategory: String? = null,
+    val reason: String? = null,
+)
 
 @Serializable
 data class PatchBody(val item: CachedItem, val message: String? = null)
@@ -90,6 +102,9 @@ class HttpPantryApi(
 
     override suspend fun me(): Me = decode(exchange("GET", "/api/v1/me"))
 
+    override suspend fun updateDisplayName(name: String): Me =
+        decode(exchange("PATCH", "/api/v1/me", pantryJson.encodeToString(DisplayNameBody.serializer(), DisplayNameBody(name))))
+
     override suspend fun createFamily(name: String): Family =
         decode(exchange("POST", "/api/v1/families", pantryJson.encodeToString(NameBody.serializer(), NameBody(name))))
 
@@ -127,6 +142,34 @@ class HttpPantryApi(
         decode(exchange("POST", "/api/v1/items/batch/undo", pantryJson.encodeToString(UndoBody.serializer(), UndoBody(token))))
 
     override suspend fun sync(since: Long): SyncPage = decode(exchange("GET", "/api/v1/sync?since=$since"))
+
+    override suspend fun barcode(code: String): BarcodeHit = decode(exchange("GET", "/api/v1/barcodes/$code"))
+
+    override suspend fun uploadPhoto(itemId: String, bytes: ByteArray): CachedItem {
+        val body = okhttp3.MultipartBody.Builder()
+            .setType(okhttp3.MultipartBody.FORM)
+            .addFormDataPart("file", "photo.jpg", bytes.toRequestBody("image/jpeg".toMediaType()))
+            .build()
+        val builder = okhttp3.Request.Builder().url(base + "/api/v1/items/$itemId/photo").post(body)
+        token()?.let { builder.header("Authorization", "Bearer $it") }
+        client.newCall(builder.build()).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val err = runCatching { pantryJson.decodeFromString(ErrorWire.serializer(), text) }.getOrNull()
+                throw PantryCallException(response.code, err?.error ?: "http", err?.message ?: "照片上传失败")
+            }
+            return pantryJson.decodeFromString(CachedItem.serializer(), text)
+        }
+    }
+
+    override suspend fun photoThumb(photoId: String): ByteArray {
+        val builder = okhttp3.Request.Builder().url(base + "/api/v1/photos/$photoId?thumb=1")
+        token()?.let { builder.header("Authorization", "Bearer $it") }
+        client.newCall(builder.build()).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("thumb")
+            return response.body?.bytes() ?: throw IOException("thumb")
+        }
+    }
 
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit {
         val wsBase = when {
@@ -190,6 +233,9 @@ private data class LoginWire(val userId: String, val displayName: String, val to
 
 @Serializable
 private data class NameBody(val name: String)
+
+@Serializable
+private data class DisplayNameBody(val displayName: String)
 
 @Serializable
 private data class JoinBody(val code: String)

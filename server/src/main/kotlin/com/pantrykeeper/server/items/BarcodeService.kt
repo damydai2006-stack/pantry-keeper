@@ -1,6 +1,8 @@
 package com.pantrykeeper.server.items
 
+import com.pantrykeeper.server.auth.SlidingLimiter
 import com.pantrykeeper.server.config.AppConfig
+import java.time.Duration
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
@@ -51,7 +53,10 @@ class OffBarcodeFetcher(private val config: AppConfig) : BarcodeFetcher {
 }
 
 class BarcodeService(private val clock: Clock, private val fetcher: BarcodeFetcher) {
-    fun lookup(raw: String): BarcodeLookup {
+    private val limiter = SlidingLimiter(clock, maxHits = 20, window = Duration.ofMinutes(1))
+
+    fun lookup(userId: Uuid, raw: String): BarcodeLookup {
+        limiter.hit(userId.toString())
         val code = raw.trim()
         if (!code.all { it.isDigit() } || code.length !in setOf(8, 12, 13, 14, 20)) {
             return BarcodeLookup(found = false, reason = "invalid_code")

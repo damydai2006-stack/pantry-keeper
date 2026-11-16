@@ -81,6 +81,21 @@ class SessionService(private val clock: Clock) {
         Sessions.selectAll().where { Sessions.id eq sessionId }.singleOrNull()?.get(Sessions.expiresAt)
     }
 
+    fun updateDisplayName(userId: Uuid, raw: String): UserProfile {
+        val name = raw.trim()
+        com.pantrykeeper.core.model.FieldLimits.displayNameError(name)?.let {
+            throw ApiException(HttpStatusCode.BadRequest, "invalid_name", it)
+        }
+        val now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC)
+        transaction {
+            Users.update({ Users.id eq userId }) {
+                it[displayName] = name
+                it[updatedAt] = now
+            }
+        }
+        return profile(userId)
+    }
+
     fun updateNotifyTime(userId: Uuid, raw: String) {
         val time = runCatching { LocalTime.parse(raw) }.getOrNull()
             ?: throw ApiException(HttpStatusCode.BadRequest, "invalid_time", "时间格式应为 HH:mm")

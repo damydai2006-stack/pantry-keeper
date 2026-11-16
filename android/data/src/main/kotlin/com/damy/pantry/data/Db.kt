@@ -60,7 +60,12 @@ class MemorySession : SessionStore {
 class PrefSession(context: Context, private val crypto: SessionCrypto = AndroidKeystoreSession.crypto()) : SessionStore {
     private val prefs = context.getSharedPreferences("pantry", Context.MODE_PRIVATE)
     override var token: String?
-        get() = prefs.getString("token", null)?.let { runCatching { crypto.decrypt(it) }.getOrNull() }
+        get() = prefs.getString("token", null)?.let { stored ->
+            runCatching { crypto.decrypt(stored) }.getOrElse {
+                prefs.edit().remove("token").apply()
+                null
+            }
+        }
         set(value) {
             prefs.edit().putString("token", value?.let { crypto.encrypt(it) }).apply()
         }
@@ -89,7 +94,7 @@ class PrefSession(context: Context, private val crypto: SessionCrypto = AndroidK
  * Local cache. Room's processor cannot read Kotlin 2.4 metadata yet, so this
  * uses the platform SQLite with the same items/meta tables a Room database would.
  */
-class PantryDatabase(context: Context) : SQLiteOpenHelper(context, "pantry.db", null, 1) {
+class PantryDatabase(context: Context) : SQLiteOpenHelper(context, "pantry.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -107,14 +112,17 @@ class PantryDatabase(context: Context) : SQLiteOpenHelper(context, "pantry.db", 
               expiry_basis TEXT NOT NULL,
               reminder_tiers TEXT NOT NULL,
               status TEXT NOT NULL,
-              rev INTEGER NOT NULL
+              rev INTEGER NOT NULL,
+              photo_id TEXT
             )
             """.trimIndent(),
         )
         db.execSQL("CREATE TABLE meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE items ADD COLUMN photo_id TEXT")
+    }
 
     companion object {
         fun open(context: Context): PantryDatabase = PantryDatabase(context.applicationContext)
@@ -149,6 +157,7 @@ class SqliteItemCache(private val db: PantryDatabase) : ItemCache {
                     put("reminder_tiers", item.reminderTiers.joinToString(","))
                     put("status", item.status)
                     put("rev", item.rev)
+                    put("photo_id", item.photoId)
                 })
             }
             database.setTransactionSuccessful()
@@ -181,5 +190,6 @@ private fun android.database.Cursor.toItem(): CachedItem = CachedItem(
     reminderTiers = getString(11).split(',').filter { it.isNotBlank() },
     status = getString(12),
     rev = getLong(13),
+    photoId = if (columnCount > 14 && !isNull(14)) getString(14) else null,
 )
 

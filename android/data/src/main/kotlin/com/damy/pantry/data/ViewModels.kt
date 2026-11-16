@@ -22,8 +22,7 @@ class LoginViewModel(private val repo: PantryRepository) : ViewModel() {
 
     fun canRequestCode(): Boolean = phone.value.length == 11 && secondsLeft.value == 0 && !busy.value
 
-    // The server hashes the presented code and does not enforce a digit length.
-    fun canLogin(): Boolean = phone.value.length == 11 && code.value.isNotEmpty() && agreed.value && !busy.value
+    fun canLogin(): Boolean = phone.value.length == 11 && code.value.length == 6 && code.value.all(Char::isDigit) && agreed.value && !busy.value
 
     fun requestCode() {
         if (!agreed.value) {
@@ -181,6 +180,27 @@ class ItemFormViewModel(private val repo: PantryRepository, private val today: (
     val error = MutableStateFlow<String?>(null)
     val preview = MutableStateFlow("")
     var editing: CachedItem? = null
+    var lastCreatedId: String? = null
+
+    fun prefill(name: String, expiry: String?, production: String?, category: String?, shelfValue: Int? = null, shelfUnit: String? = null, manualMode: String? = null) {
+        this.name.value = name
+        if (!category.isNullOrBlank()) this.category.value = category
+        if (!production.isNullOrBlank()) productionText.value = production
+        if (manualMode == "date" || (manualMode != "shelf" && !expiry.isNullOrBlank())) {
+            useDate.value = true
+            expiryText.value = expiry.orEmpty()
+        } else if (shelfValue != null) {
+            chooseShelf(shelfValue, when (shelfUnit) {
+                "month" -> ShelfUnit.MONTH
+                "year" -> ShelfUnit.YEAR
+                else -> ShelfUnit.DAY
+            })
+        } else if (!expiry.isNullOrBlank()) {
+            useDate.value = true
+            expiryText.value = expiry
+        }
+        refreshPreview()
+    }
 
     fun load(item: CachedItem?) {
         editing = item
@@ -249,7 +269,7 @@ class ItemFormViewModel(private val repo: PantryRepository, private val today: (
                 )
                 val original = editing
                 val message = if (original == null) {
-                    repo.saveNew(draft)
+                    lastCreatedId = repo.saveNew(draft)
                     null
                 } else {
                     repo.saveEdit(original, draft)

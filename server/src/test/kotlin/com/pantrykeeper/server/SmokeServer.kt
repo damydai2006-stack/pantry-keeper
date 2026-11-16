@@ -14,13 +14,19 @@ import java.util.UUID
  * Local-only server for the Android emulator smoke. The test code and phone are
  * written under /tmp and are never printed.
  */
+internal fun sixDigitCode(): String {
+    val digits = UUID.randomUUID().toString().filter { it.isDigit() } +
+        UUID.randomUUID().toString().filter { it.isDigit() }
+    return digits.padEnd(6, '0').take(6)
+}
+
 fun main() {
     val pg = EmbeddedPostgres.builder()
         .setLocaleConfig("locale", "C")
         .setLocaleConfig("lc-messages", "C")
         .start()
     val phone = "13" + "8" + "0".repeat(8)
-    val code = ("k" + UUID.randomUUID().toString().filter { it.isDigit() } + "23456").take(6)
+    val code = sixDigitCode()
     val enc = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
     val mac = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
     val data = Files.createTempDirectory("pantry-smoke")

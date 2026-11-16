@@ -36,6 +36,7 @@ import com.damy.pantry.ui.HomeScreen
 import com.damy.pantry.ui.ItemFormScreen
 import com.damy.pantry.ui.LoginScreen
 import com.damy.pantry.ui.MembersScreen
+import com.damy.pantry.ui.NicknameScreen
 import com.damy.pantry.ui.PantryTheme
 import com.damy.pantry.ui.StubScreen
 import kotlinx.coroutines.launch
@@ -103,9 +104,19 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
         composable("login") {
             val vm: LoginViewModel = viewModel(factory = repo.factory { LoginViewModel(repo) })
             LoginScreen(vm, onFamily = {
-                nav.navigate("family") { popUpTo("login") { inclusive = true } }
+                nav.navigate(if (needsDisplayName(repo)) "nickname/family" else "family") { popUpTo("login") { inclusive = true } }
             }, onHome = {
-                nav.navigate("home") { popUpTo("login") { inclusive = true } }
+                nav.navigate(if (needsDisplayName(repo)) "nickname/home" else "home") { popUpTo("login") { inclusive = true } }
+            })
+        }
+        composable("nickname/{next}") { entry ->
+            val next = entry.arguments?.getString("next").orEmpty()
+            NicknameScreen(repo, onBack = { nav.popBackStack() }, onSaved = {
+                when (next) {
+                    "home" -> nav.navigate("home") { popUpTo("nickname/$next") { inclusive = true } }
+                    "family" -> nav.navigate("family") { popUpTo("nickname/$next") { inclusive = true } }
+                    else -> nav.popBackStack()
+                }
             })
         }
         composable("family") {
@@ -139,17 +150,57 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
                 listVm = listVm,
                 historyVm = historyVm,
                 today = shanghaiToday(),
-                onAddManual = { nav.navigate("form") },
+                onAddManual = {
+                    val captureId = com.damy.pantry.data.PendingPhoto.beginCapture()
+                    nav.navigate("form/$captureId")
+                },
                 onEdit = { nav.navigate("edit/$it") },
                 onStub = { nav.navigate("stub/$it") },
+                onCapture = { mode ->
+                    val captureId = com.damy.pantry.data.PendingPhoto.beginCapture()
+                    nav.navigate("capture/$mode/$captureId")
+                },
                 onMembers = { nav.navigate("members") },
+                onNickname = { nav.navigate("nickname/stay") },
                 onLogout = { nav.navigate("login") { popUpTo(nav.graph.id) { inclusive = true } } },
                 onRemoved = { nav.navigate("family") { popUpTo("home") { inclusive = true } } },
             )
         }
-        composable("form") {
-            val vm: ItemFormViewModel = viewModel(factory = repo.factory { ItemFormViewModel(repo) { shanghaiToday() } })
-            ItemFormScreen(vm, repo, null, onBack = { nav.popBackStack() }, onSaved = { nav.popBackStack() })
+        composable("shelf/{captureId}") { entry ->
+            val captureId = entry.arguments?.getString("captureId").orEmpty()
+            com.damy.pantry.capture.ShelfPickScreen(shanghaiToday(), onBack = { nav.popBackStack() }, onDone = { prefill ->
+                com.damy.pantry.capture.PendingCapture.prefill = prefill.copy(captureId = captureId)
+                nav.navigate("form/$captureId") { popUpTo("home") }
+            }, captureId = captureId)
+        }
+        composable("form/{captureId}") { entry ->
+            val captureId = entry.arguments?.getString("captureId").orEmpty()
+            val vm: ItemFormViewModel = viewModel(key = captureId, factory = repo.factory { ItemFormViewModel(repo) { shanghaiToday() } })
+            val scope = rememberCoroutineScope()
+            ItemFormScreen(vm, repo, null, onBack = {
+                com.damy.pantry.data.PendingPhoto.abandon(captureId)
+                nav.popBackStack()
+            }, onSaved = { message ->
+                val created = vm.lastCreatedId
+                val jpeg = if (message == null) com.damy.pantry.data.PendingPhoto.takeCapture(captureId) else null
+                if (message != null) com.damy.pantry.data.PendingPhoto.abandon(captureId)
+                if (jpeg != null && created != null) {
+                    scope.launch {
+                        val prepared = runCatching { com.damy.pantry.capture.compressForUpload(jpeg) }.getOrElse {
+                            com.damy.pantry.data.PendingPhoto.holdForItem(created, jpeg)
+                            repo.notice.value = "照片未上传，可在编辑页重试"
+                            return@launch
+                        }
+                        runCatching { repo.uploadPhoto(created, prepared) }
+                            .onSuccess { com.damy.pantry.data.PendingPhoto.remove(created) }
+                            .onFailure {
+                                com.damy.pantry.data.PendingPhoto.holdForItem(created, jpeg)
+                                repo.notice.value = "照片未上传，可在编辑页重试"
+                            }
+                    }
+                }
+                nav.popBackStack()
+            })
         }
         composable("edit/{id}") { entry ->
             val id = entry.arguments?.getString("id")
@@ -161,10 +212,36 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
                 nav.navigate("family") { popUpTo("home") { inclusive = true } }
             })
         }
+        composable("capture/{mode}/{captureId}") { entry ->
+            val captureId = entry.arguments?.getString("captureId").orEmpty()
+            val mode = if (entry.arguments?.getString("mode") == "scan") com.damy.pantry.capture.CaptureMode.SCAN else com.damy.pantry.capture.CaptureMode.PHOTO
+            com.damy.pantry.capture.CaptureEntry(
+                mode = mode,
+                captureId = captureId,
+                lookup = { repo.barcode(it) },
+                onDone = { prefill ->
+                    val id = prefill.captureId ?: captureId
+                    com.damy.pantry.capture.PendingCapture.prefill = prefill.copy(captureId = id)
+                    nav.navigate("form/$id") { popUpTo("home") }
+                },
+                onManual = { prefill ->
+                    val id = prefill.captureId ?: captureId
+                    com.damy.pantry.capture.PendingCapture.prefill = prefill.copy(captureId = id)
+                    val route = if (prefill.manualMode == "shelf") "shelf/$id" else "form/$id"
+                    nav.navigate(route) { popUpTo("home") }
+                },
+                onBack = { nav.popBackStack() },
+            )
+        }
         composable("stub/{name}") { entry ->
             StubScreen(entry.arguments?.getString("name").orEmpty()) { nav.popBackStack() }
         }
     }
+}
+
+private fun needsDisplayName(repo: PantryRepository): Boolean {
+    val name = repo.session.displayName
+    return name.isNullOrBlank() || name == "用户"
 }
 
 private fun <T : ViewModel> PantryRepository.factory(create: () -> T): ViewModelProvider.Factory =

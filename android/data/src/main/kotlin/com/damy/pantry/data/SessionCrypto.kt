@@ -56,4 +56,27 @@ object AndroidKeystoreSession {
         val key = (ks.getEntry(ALIAS, null) as KeyStore.SecretKeyEntry).secretKey
         return SessionCrypto(key)
     }
+
+    fun deleteAlias() {
+        runCatching {
+            val ks = KeyStore.getInstance(PROVIDER).apply { load(null) }
+            if (ks.containsAlias(ALIAS)) ks.deleteEntry(ALIAS)
+        }
+    }
+}
+
+data class OpenedSession(val session: SessionStore, val message: String?)
+
+/** Try the keystore twice. If it still fails, drop the saved session and ask for a fresh login. */
+fun openSession(load: () -> SessionStore, deleteAlias: () -> Unit = { AndroidKeystoreSession.deleteAlias() }): OpenedSession {
+    return try {
+        OpenedSession(load(), null)
+    } catch (_: Exception) {
+        runCatching { deleteAlias() }
+        try {
+            OpenedSession(load(), null)
+        } catch (_: Exception) {
+            OpenedSession(MemorySession(), "安全存储不可用，请重新登录")
+        }
+    }
 }

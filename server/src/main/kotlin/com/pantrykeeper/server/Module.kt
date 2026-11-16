@@ -80,7 +80,7 @@ fun Application.module(
     val sessions = SessionService(clock)
     val auth = AuthService(config, clock, crypto, sessions)
     val families = FamilyService(clock)
-    val purge = PurgeService(clock)
+    val purge = PurgeService(clock, java.nio.file.Path.of(config.dataDir))
     val hub = FamilyHub(CoroutineScope(SupervisorJob() + Dispatchers.IO), sessions::sessionOpen)
     val photos = PhotoService(config, clock, hub, freeBytes ?: { Files.getFileStore(it).usableSpace })
     val items = ItemService(clock, hub, photos)
@@ -98,8 +98,12 @@ fun Application.module(
         exception<ApiException> { call, cause ->
             call.respond(cause.status, ErrorBody(cause.code, cause.message ?: ""))
         }
+        exception<io.ktor.server.plugins.BadRequestException> { call, cause ->
+            log.error("request failed: ${cause.javaClass.name}")
+            call.respond(HttpStatusCode.BadRequest, ErrorBody("bad_request", "请求格式不正确"))
+        }
         exception<Throwable> { call, cause ->
-            log.error("request failed", cause)
+            log.error("request failed: ${cause.javaClass.name}")
             call.respond(HttpStatusCode.InternalServerError, ErrorBody("internal", "服务器错误"))
         }
     }
@@ -185,6 +189,13 @@ fun Application.module(
             get("/me") {
                 val ctx = call.requireSession(sessions, config)
                 val profile = sessions.profile(ctx.userId)
+                val familyId = families.currentFamilyId(ctx.userId)
+                call.respond(MeResponse(profile.userId.toString(), profile.displayName, profile.notifyTime, familyId?.toString()))
+            }
+            patch("/me") {
+                val ctx = call.requireSession(sessions, config)
+                val body = call.receive<DisplayNameRequest>()
+                val profile = sessions.updateDisplayName(ctx.userId, body.displayName)
                 val familyId = families.currentFamilyId(ctx.userId)
                 call.respond(MeResponse(profile.userId.toString(), profile.displayName, profile.notifyTime, familyId?.toString()))
             }
@@ -295,9 +306,9 @@ fun Application.module(
                 call.respondBytes(photo.bytes, io.ktor.http.ContentType.parse(photo.contentType))
             }
             get("/barcodes/{code}") {
-                call.requireSession(sessions, config)
+                val ctx = call.requireSession(sessions, config)
                 val code = call.parameters["code"] ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
-                call.respond(barcodes.lookup(code))
+                call.respond(barcodes.lookup(ctx.userId, code))
             }
             get("/sync") {
                 val ctx = call.requireSession(sessions, config)
@@ -374,6 +385,9 @@ data class MeResponse(val userId: String, val displayName: String, val notifyTim
 
 @Serializable
 data class SettingsRequest(val notifyTime: String)
+
+@kotlinx.serialization.Serializable
+data class DisplayNameRequest(val displayName: String)
 
 @Serializable
 data class CreateFamilyRequest(val name: String)
