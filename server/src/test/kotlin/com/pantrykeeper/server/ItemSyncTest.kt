@@ -519,6 +519,23 @@ class ItemSyncTest {
         }
         assertEquals(HttpStatusCode.NotFound, unknown.status)
         assertEquals(before, photoFileCount())
+        client.post("/api/v1/items/batch") {
+            bearer(owner)
+            contentType(ContentType.Application.Json)
+            setBody(BatchItemRequest(listOf(item.id), "delete"))
+        }
+        val afterDelete = photoFileCount()
+        val gone = client.post("/api/v1/items/${item.id}/photo") {
+            bearer(owner)
+            setBody(MultiPartFormDataContent(formData {
+                append("file", tinyJpeg(), Headers.build {
+                    append(HttpHeaders.ContentType, ContentType.Image.JPEG.toString())
+                    append(HttpHeaders.ContentDisposition, "filename=\"gone.jpg\"")
+                })
+            }))
+        }
+        assertEquals(HttpStatusCode.NotFound, gone.status)
+        assertEquals(afterDelete, photoFileCount())
     }
 }
 
