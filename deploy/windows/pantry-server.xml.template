@@ -1,0 +1,15 @@
+<service>
+  <id>__SERVICE_ID__</id>
+  <name>__SERVICE_ID__</name>
+  <description>Pantry Keeper API</description>
+  <executable>__INSTALL_ROOT__\jre\bin\java.exe</executable>
+  <arguments>-Xmx256m -jar __INSTALL_ROOT__\bin\pantry-server.jar</arguments>
+  <workingdirectory>__INSTALL_ROOT__</workingdirectory>
+  <priority>BelowNormal</priority>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+  <env name="PANTRY_ENV_FILE" value="__INSTALL_ROOT__\conf\server.env"/>
+  <env name="PANTRY_LISTEN_PORT" value="__LISTEN_PORT__"/>
+</service>
