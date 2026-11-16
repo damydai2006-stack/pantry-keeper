@@ -9,7 +9,15 @@ import com.pantrykeeper.server.config.AppConfig
 import com.pantrykeeper.server.config.AuthMode
 import com.pantrykeeper.server.db.DatabaseFactory
 import com.pantrykeeper.server.family.FamilyService
+import com.pantrykeeper.server.family.FamilySignal
 import com.pantrykeeper.server.family.PurgeService
+import com.pantrykeeper.server.items.BarcodeFetcher
+import com.pantrykeeper.server.items.BarcodeService
+import com.pantrykeeper.server.items.CreateItemRequest
+import com.pantrykeeper.server.items.ItemService
+import com.pantrykeeper.server.items.OffBarcodeFetcher
+import com.pantrykeeper.server.items.PhotoService
+import com.pantrykeeper.server.sync.FamilyHub
 import com.pantrykeeper.server.http.ApiException
 import com.pantrykeeper.server.http.ErrorBody
 import com.pantrykeeper.server.http.appJson
@@ -17,6 +25,11 @@ import io.ktor.http.Cookie
 import io.ktor.http.CookieEncoding
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.PartData
+import io.ktor.utils.io.readRemaining
+import io.ktor.websocket.close
+import kotlinx.io.readByteArray
+import io.ktor.websocket.WebSocketSession
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
@@ -25,23 +38,40 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.receive
+import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondBytes
+import io.ktor.server.websocket.DefaultWebSocketServerSession
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.webSocket
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
+import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.slf4j.LoggerFactory
+import java.nio.file.Files
+import java.nio.file.Path
 import java.security.MessageDigest
 import java.time.Clock
 import kotlin.uuid.Uuid
 
 private val log = LoggerFactory.getLogger("pantry")
 
-fun Application.module(config: AppConfig, clock: Clock) {
+fun Application.module(
+    config: AppConfig,
+    clock: Clock,
+    barcodeFetcher: BarcodeFetcher? = null,
+    freeBytes: ((Path) -> Long)? = null,
+) {
     if (config.authMode == AuthMode.TEST) {
         log.warn("AUTH_MODE=test is enabled. Test-code login is active only for the configured allowlist.")
     }
@@ -51,8 +81,19 @@ fun Application.module(config: AppConfig, clock: Clock) {
     val auth = AuthService(config, clock, crypto, sessions)
     val families = FamilyService(clock)
     val purge = PurgeService(clock)
+    val hub = FamilyHub(CoroutineScope(SupervisorJob() + Dispatchers.IO))
+    val photos = PhotoService(config, clock, hub, freeBytes ?: { Files.getFileStore(it).usableSpace })
+    val items = ItemService(clock, hub, photos)
+    val barcodes = BarcodeService(clock, barcodeFetcher ?: OffBarcodeFetcher(config))
+    families.signals = { signal ->
+        when (signal) {
+            is FamilySignal.Changed -> hub.changed(signal.familyId, runCatching { items.head(signal.familyId) }.getOrDefault(0L))
+            is FamilySignal.Removed -> hub.removed(signal.userId)
+        }
+    }
 
     install(ContentNegotiation) { json(appJson) }
+    install(WebSockets)
     install(StatusPages) {
         exception<ApiException> { call, cause ->
             call.respond(cause.status, ErrorBody(cause.code, cause.message ?: ""))
@@ -63,7 +104,25 @@ fun Application.module(config: AppConfig, clock: Clock) {
         }
     }
 
+    suspend fun DefaultWebSocketServerSession.bindSocket() {
+        val ctx = call.requireSession(sessions, config)
+        val family = families.currentFamilyId(ctx.userId)
+        if (family == null) {
+            close()
+            return
+        }
+        hub.register(ctx.userId, family, this)
+        try {
+            for (frame in incoming) {
+                if (frame is io.ktor.websocket.Frame.Close) break
+            }
+        } finally {
+            hub.unregister(this)
+        }
+    }
+
     routing {
+        webSocket("/ws") { bindSocket() }
         get("/healthz") { call.respond(mapOf("status" to "ok")) }
         get("/readyz") {
             val dbOk = try {
@@ -121,7 +180,7 @@ fun Application.module(config: AppConfig, clock: Clock) {
                 val familyId = families.currentFamilyId(ctx.userId)
                 call.respond(MeResponse(profile.userId.toString(), profile.displayName, profile.notifyTime, familyId?.toString()))
             }
-            post("/me/settings") {
+            put("/me/settings") {
                 val ctx = call.requireSession(sessions, config)
                 val body = call.receive<SettingsRequest>()
                 sessions.updateNotifyTime(ctx.userId, body.notifyTime)
@@ -168,6 +227,85 @@ fun Application.module(config: AppConfig, clock: Clock) {
                 val uid = runCatching { Uuid.parse(body.userId) }.getOrNull()
                     ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
                 call.respond(families.transfer(ctx.userId, uid))
+            }
+            webSocket("/ws") { bindSocket() }
+            post("/items") {
+                val ctx = call.requireSession(sessions, config)
+                val body = call.receive<CreateItemRequest>()
+                call.respond(items.create(ctx.userId, families.currentFamilyId(ctx.userId), body))
+            }
+            get("/items") {
+                val ctx = call.requireSession(sessions, config)
+                call.respond(items.list(families.currentFamilyId(ctx.userId), call.request.queryParameters["status"]))
+            }
+            get("/items/{id}") {
+                val ctx = call.requireSession(sessions, config)
+                val id = call.parameters["id"] ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
+                call.respond(items.get(ctx.userId, families.currentFamilyId(ctx.userId), id))
+            }
+            patch("/items/{id}") {
+                val ctx = call.requireSession(sessions, config)
+                val id = call.parameters["id"] ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
+                val body = call.receive<PatchItemRequest>()
+                val result = items.patch(ctx.userId, families.currentFamilyId(ctx.userId), id, body.baseRev, body.fields)
+                call.respond(PatchItemResponse(result.item, result.overwritten, result.message()))
+            }
+            post("/items/batch") {
+                val ctx = call.requireSession(sessions, config)
+                val body = call.receive<BatchItemRequest>()
+                val result = items.batch(ctx.userId, families.currentFamilyId(ctx.userId), body.ids, body.action)
+                call.respond(BatchItemResponse(result.undoToken, result.rev))
+            }
+            post("/items/batch/undo") {
+                val ctx = call.requireSession(sessions, config)
+                val body = call.receive<UndoItemRequest>()
+                val result = items.undo(ctx.userId, families.currentFamilyId(ctx.userId), body.undoToken)
+                call.respond(UndoItemResponse(result.skipped, result.restored, result.message()))
+            }
+            post("/items/{id}/photo") {
+                val ctx = call.requireSession(sessions, config)
+                val id = call.parameters["id"] ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
+                var bytes: ByteArray? = null
+                var type: String? = null
+                val multipart = call.receiveMultipart()
+                while (true) {
+                    val part = multipart.readPart() ?: break
+                    if (part is PartData.FileItem && bytes == null) {
+                        bytes = part.provider().readRemaining().readByteArray()
+                        type = part.contentType?.toString()
+                    }
+                }
+                val payload = bytes ?: throw ApiException(HttpStatusCode.BadRequest, "photo_required", "没有照片")
+                photos.upload(ctx.userId, families.currentFamilyId(ctx.userId), ctx.clientKind, id, payload, type)
+                call.respond(items.get(ctx.userId, families.currentFamilyId(ctx.userId), id))
+            }
+            get("/photos/{id}") {
+                val ctx = call.requireSession(sessions, config)
+                val id = call.parameters["id"] ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
+                val thumb = call.request.queryParameters["thumb"] == "1"
+                val photo = photos.read(families.currentFamilyId(ctx.userId), id, thumb)
+                call.respondBytes(photo.bytes, io.ktor.http.ContentType.parse(photo.contentType))
+            }
+            get("/barcodes/{code}") {
+                call.requireSession(sessions, config)
+                val code = call.parameters["code"] ?: throw ApiException(HttpStatusCode.NotFound, "not_found", "未找到")
+                call.respond(barcodes.lookup(code))
+            }
+            get("/sync") {
+                val ctx = call.requireSession(sessions, config)
+                val since = call.request.queryParameters["since"]?.toLongOrNull() ?: 0L
+                val payload = items.sync(ctx.userId, families.currentFamilyId(ctx.userId), since)
+                val family = if (payload.reset) null else runCatching { families.current(ctx.userId) }.getOrNull()
+                call.respond(
+                    SyncResponse(
+                        reset = payload.reset,
+                        rev = payload.rev,
+                        items = payload.items,
+                        tombstones = payload.tombstones,
+                        family = family,
+                        notifyTime = payload.notifyTime,
+                    ),
+                )
             }
         }
     }
@@ -252,3 +390,31 @@ data class PurgeResponse(val purgedFamilies: Int)
 
 @Serializable
 data class ReadyBody(val status: String, val testCodeMode: Boolean, val testClock: Boolean, val database: String)
+
+@Serializable
+data class PatchItemRequest(val baseRev: Long, val fields: JsonObject)
+
+@Serializable
+data class PatchItemResponse(val item: com.pantrykeeper.server.items.ItemDto, val overwritten: List<com.pantrykeeper.server.items.Overwritten>, val message: String? = null)
+
+@Serializable
+data class BatchItemRequest(val ids: List<String>, val action: String)
+
+@Serializable
+data class BatchItemResponse(val undoToken: String? = null, val rev: Long)
+
+@Serializable
+data class UndoItemRequest(val undoToken: String)
+
+@Serializable
+data class UndoItemResponse(val skipped: Int, val restored: Int, val message: String? = null)
+
+@Serializable
+data class SyncResponse(
+    val reset: Boolean,
+    val rev: Long,
+    val items: List<com.pantrykeeper.server.items.ItemDto> = emptyList(),
+    val tombstones: List<com.pantrykeeper.server.items.TombstoneDto> = emptyList(),
+    val family: com.pantrykeeper.server.family.FamilyView? = null,
+    val notifyTime: String? = null,
+)

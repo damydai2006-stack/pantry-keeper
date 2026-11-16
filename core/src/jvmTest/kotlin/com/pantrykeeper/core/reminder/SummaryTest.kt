@@ -30,9 +30,9 @@ class SummaryTest {
         assertEquals("牛奶今天到期", ReminderRules.phrase("牛奶", milk))
         assertEquals("感冒灵 5 天后到期", ReminderRules.phrase("感冒灵", cold))
         assertEquals(8, sauce.expiredDays)
-        assertEquals("酱油已过期第 8 天", ReminderRules.phrase("酱油", sauce))
+        assertEquals("酱油已过期 8 天", ReminderRules.phrase("酱油", sauce))
         assertEquals(
-            "3 件物品需要注意：牛奶今天到期；感冒灵 5 天后到期；酱油已过期第 8 天",
+            "3 件物品需要注意：牛奶今天到期；感冒灵 5 天后到期；酱油已过期 8 天",
             ReminderRules.summary(
                 listOf(
                     ReminderRules.phrase("牛奶", milk),

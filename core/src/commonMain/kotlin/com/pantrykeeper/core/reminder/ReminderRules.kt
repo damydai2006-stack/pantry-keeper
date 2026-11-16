@@ -99,7 +99,7 @@ object ReminderRules {
 
     fun phrase(name: String, notice: Notice): String = when (notice.kind) {
         NoticeKind.EXPIRY_TODAY -> "${name}今天到期"
-        NoticeKind.EXPIRED -> "${name}已过期第 ${notice.expiredDays} 天"
+        NoticeKind.EXPIRED -> "${name}已过期 ${notice.expiredDays} 天"
         NoticeKind.TIER -> when (notice.tier) {
             Tier.M2 -> "$name 2 个月后到期"
             Tier.M3 -> "$name 3 个月后到期"

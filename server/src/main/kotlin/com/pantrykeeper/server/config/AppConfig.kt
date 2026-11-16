@@ -25,10 +25,24 @@ class AppConfig(
     val listenPort: Int,
     val cookieSecure: Boolean,
     val poolSize: Int = 5,
+    val dataDir: String = "data/photos",
+    val photoMaxBytes: Long = 8L * 1024L * 1024L,
+    val offBaseUrl: String = "https://world.openfoodfacts.org",
+    val offUserAgent: String = "pantry-keeper/0.1 (family expiry tracker)",
+    val offTimeoutMs: Long = 3000,
 ) {
-    fun withTestClock(enabled: Boolean): AppConfig = AppConfig(
-        profile, enabled, testToken, dbUrl, dbUser, dbPassword, phoneEncKey, phoneHmacKey,
+    fun withTestClock(enabled: Boolean): AppConfig = copy(testClockEnabled = enabled)
+
+    fun copy(
+        testClockEnabled: Boolean = this.testClockEnabled,
+        familyPhotoMb: Long = this.familyPhotoMb,
+        minFreeMb: Long = this.minFreeMb,
+        dataDir: String = this.dataDir,
+        photoMaxBytes: Long = this.photoMaxBytes,
+    ): AppConfig = AppConfig(
+        profile, testClockEnabled, testToken, dbUrl, dbUser, dbPassword, phoneEncKey, phoneHmacKey,
         authMode, testCode, testPhones, familyPhotoMb, minFreeMb, listenHost, listenPort, cookieSecure, poolSize,
+        dataDir, photoMaxBytes, offBaseUrl, offUserAgent, offTimeoutMs,
     )
 
     override fun toString(): String =
@@ -91,6 +105,11 @@ class AppConfig(
                 listenPort = env["PANTRY_LISTEN_PORT"]?.toIntOrNull() ?: 18280,
                 cookieSecure = !env["PANTRY_COOKIE_SECURE"].equals("false", ignoreCase = true),
                 poolSize = env["PANTRY_DB_POOL"]?.toIntOrNull() ?: 5,
+                dataDir = env["PANTRY_DATA_DIR"]?.trim().orEmpty().ifEmpty { "data/photos" },
+                photoMaxBytes = env["PANTRY_PHOTO_MAX_BYTES"]?.toLongOrNull() ?: (8L * 1024L * 1024L),
+                offBaseUrl = env["PANTRY_OFF_BASE_URL"]?.trim().orEmpty().ifEmpty { "https://world.openfoodfacts.org" },
+                offUserAgent = env["PANTRY_OFF_USER_AGENT"]?.trim().orEmpty().ifEmpty { "pantry-keeper/0.1 (family expiry tracker)" },
+                offTimeoutMs = env["PANTRY_OFF_TIMEOUT_MS"]?.toLongOrNull() ?: 3000L,
             )
         }
 

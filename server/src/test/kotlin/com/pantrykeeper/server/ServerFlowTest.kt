@@ -309,6 +309,23 @@ class PureRuleTest {
     }
 
     @Test
+    fun installSecretsStayOffTheCommandLine() {
+        val pwsh = listOf("pwsh", "/tmp/pwsh/pwsh").firstOrNull { candidate ->
+            if (candidate.startsWith("/")) java.io.File(candidate).canExecute() else runCatching {
+                ProcessBuilder("which", candidate).start().waitFor() == 0
+            }.getOrDefault(false)
+        } ?: error("pwsh is required to check the installer secret plan")
+        val script = java.io.File(System.getProperty("repo.root"), "deploy/windows/install-secrets.test.ps1")
+        val proc = ProcessBuilder(pwsh, "-NoProfile", "-File", script.absolutePath)
+            .redirectErrorStream(true)
+            .start()
+        val output = proc.inputStream.bufferedReader().readText()
+        val code = proc.waitFor()
+        assertEquals(0, code, output)
+        assertTrue(output.contains("install-secrets.test.ps1 ok"))
+    }
+
+    @Test
     fun deployScriptsStayInsidePantry() {
         val dir = java.io.File(System.getProperty("repo.root"), "deploy/windows")
         val scripts = dir.listFiles { f -> f.extension == "ps1" }!!.toList()
