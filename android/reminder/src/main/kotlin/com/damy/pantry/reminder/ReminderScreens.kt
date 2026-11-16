@@ -131,18 +131,14 @@ fun NotifyTimeScreen(repo: PantryRepository, scope: CoroutineScope, onBack: () -
         )
     }
     if (explain) {
-        AlertDialog(
-            onDismissRequest = { explain = false; onBack() },
-            title = { Text("开启到期提醒") },
-            text = { Text("用于每天定时发送到期汇总，不会用于营销。", modifier = Modifier.testTag("notif_explain")) },
-            confirmButton = {
-                TextButton(onClick = {
-                    explain = false
-                    launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    onBack()
-                }) { Text("允许通知") }
+        NotificationExplainDialog(
+            onLater = { explain = false; onBack() },
+            onAllow = {
+                explain = false
+                markNotificationPrompted(context)
+                launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                onBack()
             },
-            dismissButton = { TextButton(onClick = { explain = false; onBack() }) { Text("以后再说") } },
         )
     }
 }
@@ -150,6 +146,27 @@ fun NotifyTimeScreen(repo: PantryRepository, scope: CoroutineScope, onBack: () -
 fun openNotificationSettings(context: android.content.Context) {
     val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
     context.startActivity(intent)
+}
+
+@Composable
+fun NotificationExplainDialog(onLater: () -> Unit, onAllow: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onLater,
+        title = { Text("开启到期提醒") },
+        text = { Text("用于每天定时发送到期汇总，不会用于营销。", modifier = Modifier.testTag("notif_explain")) },
+        confirmButton = { TextButton(onClick = onAllow) { Text("允许通知") } },
+        dismissButton = { TextButton(onClick = onLater) { Text("以后再说") } },
+    )
+}
+
+/** Home banner and the access page share this: explain once, then ask the system. */
+fun openNotificationEntry(context: android.content.Context, onExplain: () -> Unit) {
+    val explain = shouldExplainNotification(
+        Build.VERSION.SDK_INT,
+        notificationsAllowed(context),
+        notificationPrompted(context),
+    )
+    if (explain) onExplain() else openNotificationSettings(context)
 }
 
 @Composable
@@ -162,6 +179,8 @@ fun rememberToday(): LocalDate {
 @Composable
 fun ReminderAccessScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    var explain by remember { mutableStateOf(false) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     Column(Modifier.fillMaxSize().background(bg).verticalScroll(rememberScrollState()).padding(20.dp).testTag("reminder_access")) {
         TextButton(onClick = onBack) { Text("返回") }
         Text("让提醒准时送达", fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -172,7 +191,7 @@ fun ReminderAccessScreen(onBack: () -> Unit) {
             title = "通知",
             body = if (notificationsAllowed(context)) "已开启" else "未开启。收不到每天的汇总通知，仍可在提醒清单查看。",
             tag = "access_notifications",
-        ) { openNotificationSettings(context) }
+        ) { openNotificationEntry(context) { explain = true } }
         AccessRow(
             title = "闹钟和提醒",
             body = if (exactAlarmGranted(context)) "已允许精确闹钟" else "未允许。未授权时提醒落在 10 分钟窗口里，不作为到点验收。",
@@ -183,6 +202,16 @@ fun ReminderAccessScreen(onBack: () -> Unit) {
             body = "国产手机请允许自启动、允许后台运行，并关闭电池优化。",
             tag = "access_battery",
         ) { openBatterySettings(context) }
+    }
+    if (explain) {
+        NotificationExplainDialog(
+            onLater = { explain = false },
+            onAllow = {
+                explain = false
+                markNotificationPrompted(context)
+                if (Build.VERSION.SDK_INT >= 33) launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            },
+        )
     }
 }
 

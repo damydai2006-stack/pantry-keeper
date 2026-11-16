@@ -52,6 +52,24 @@ class AlarmMathTest {
     }
 
     @Test
+    fun lateCatchUpStaysOnTheSameDay() {
+        val evening = ZonedDateTime.of(2026, 11, 15, 23, 40, 0, 0, zone)
+        val slot = AlarmMath.nextCatchUp(evening, LocalTime.of(23, 50), sentToday = false)
+        assertEquals(15, slot.dayOfMonth)
+        assertEquals(23, slot.hour)
+        assertEquals(59, slot.minute)
+        val sent = AlarmMath.nextCatchUp(evening, LocalTime.of(23, 50), sentToday = true)
+        assertEquals(16, sent.dayOfMonth)
+        assertEquals(23, sent.hour)
+        assertEquals(59, sent.minute)
+        assertTrue(shouldExplainNotification(33, allowed = false, prompted = false))
+        assertFalse(shouldExplainNotification(33, allowed = false, prompted = true))
+        assertFalse(shouldExplainNotification(33, allowed = true, prompted = false))
+        assertFalse(shouldExplainNotification(32, allowed = false, prompted = false))
+        assertEquals(88, BOTTOM_TAB_DP + LIST_CLEARANCE_DP)
+    }
+
+    @Test
     fun expiryDayIsTodayAndExpiredUsesPlusOnePlusSeven() {
         val today = LocalDate(2026, 11, 15)
         val dueToday = item("牛奶", "2026-11-15", listOf("D5"))

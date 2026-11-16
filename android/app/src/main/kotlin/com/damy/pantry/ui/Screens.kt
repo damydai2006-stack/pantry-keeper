@@ -405,7 +405,7 @@ private fun ReminderPage(repo: PantryRepository, today: LocalDate, onEdit: (Stri
                 ItemCard(item, today, selecting = false, checked = false, thumbs[item.photoId], { onEdit(item.id) }, {})
             }
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height((com.damy.pantry.reminder.BOTTOM_TAB_DP + com.damy.pantry.reminder.LIST_CLEARANCE_DP).dp).testTag("remind_bottom"))
     }
 }
 
@@ -1102,19 +1102,31 @@ private fun NotificationOffBanner() {
         manager?.areNotificationsEnabled() == false
     }
     if (!blocked) return
+    var explain by remember { mutableStateOf(false) }
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { }
     Row(
         Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(12.dp)).background(BrandSoft).padding(start = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(keepPhrases("未开启通知，可能错过到期提醒。"), modifier = Modifier.weight(1f), color = Text, fontSize = 16.sp, maxLines = 2)
         TextButton(
-            onClick = {
-                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                    .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-                context.startActivity(intent)
-            },
+            onClick = { com.damy.pantry.reminder.openNotificationEntry(context) { explain = true } },
             modifier = Modifier.heightIn(min = 48.dp).testTag("open_notification_settings"),
         ) { Text("去设置") }
+    }
+    if (explain) {
+        com.damy.pantry.reminder.NotificationExplainDialog(
+            onLater = { explain = false },
+            onAllow = {
+                explain = false
+                com.damy.pantry.reminder.markNotificationPrompted(context)
+                if (Build.VERSION.SDK_INT >= 33) {
+                    launcher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+            },
+        )
     }
 }
 

@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.damy.pantry.data.CachedItem
 import com.damy.pantry.data.Family
 import com.damy.pantry.data.HistoryViewModel
@@ -72,7 +73,18 @@ class ReminderShots {
         val home = home(items())
         show { HomeScreen(home.repo, home.list, home.history, today, {}, {}, {}, {}, {}, {}, {}) }
         compose.onNodeWithTag("tab_remind").performClick()
-        capture("04-remind-list")
+        compose.onNodeWithTag("remind_bottom").performScrollTo()
+        capture("04-remind-bottom")
+    }
+
+    @Test
+    fun bannerExplainsBeforeTheFirstNotificationRequest() {
+        val home = home(items())
+        show { HomeScreen(home.repo, home.list, home.history, today, {}, {}, {}, {}, {}, {}, {}) }
+        compose.onNodeWithTag("open_notification_settings").performClick()
+        compose.waitForIdle()
+        check(compose.onAllNodesWithTag("notif_explain").fetchSemanticsNodes().isNotEmpty())
+        capture("11-notif-explain")
     }
 
     @Test
