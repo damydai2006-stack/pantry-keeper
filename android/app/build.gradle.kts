@@ -65,6 +65,7 @@ kotlin {
 
 dependencies {
     implementation(project(":android:data"))
+    implementation(project(":android:capture"))
     implementation(platform(libs.compose.bom))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")

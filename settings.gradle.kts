@@ -17,4 +17,5 @@ dependencyResolutionManagement {
 rootProject.name = "pantry-keeper"
 include("core", "server")
 include(":android:data")
+include(":android:capture")
 include(":android:app")

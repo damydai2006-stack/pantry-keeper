@@ -132,6 +132,7 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
                 onAddManual = { nav.navigate("form") },
                 onEdit = { nav.navigate("edit/$it") },
                 onStub = { nav.navigate("stub/$it") },
+                onCapture = { nav.navigate("capture/$it") },
                 onMembers = { nav.navigate("members") },
                 onLogout = { nav.navigate("login") { popUpTo(nav.graph.id) { inclusive = true } } },
                 onRemoved = { nav.navigate("family") { popUpTo("home") { inclusive = true } } },
@@ -150,6 +151,22 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
             MembersScreen(repo, onBack = { nav.popBackStack() }, onLeft = {
                 nav.navigate("family") { popUpTo("home") { inclusive = true } }
             })
+        }
+        composable("capture/{mode}") { entry ->
+            val mode = if (entry.arguments?.getString("mode") == "scan") com.damy.pantry.capture.CaptureMode.SCAN else com.damy.pantry.capture.CaptureMode.PHOTO
+            com.damy.pantry.capture.CaptureEntry(
+                mode = mode,
+                lookup = { repo.barcode(it) },
+                onDone = { prefill ->
+                    com.damy.pantry.capture.PendingCapture.prefill = prefill
+                    nav.navigate("form") { popUpTo("home") }
+                },
+                onManual = { prefill ->
+                    com.damy.pantry.capture.PendingCapture.prefill = prefill
+                    nav.navigate("form") { popUpTo("home") }
+                },
+                onBack = { nav.popBackStack() },
+            )
         }
         composable("stub/{name}") { entry ->
             StubScreen(entry.arguments?.getString("name").orEmpty()) { nav.popBackStack() }

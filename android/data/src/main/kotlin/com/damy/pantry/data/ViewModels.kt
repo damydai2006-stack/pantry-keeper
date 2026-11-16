@@ -181,6 +181,17 @@ class ItemFormViewModel(private val repo: PantryRepository, private val today: (
     val preview = MutableStateFlow("")
     var editing: CachedItem? = null
 
+    fun prefill(name: String, expiry: String?, production: String?, category: String?) {
+        this.name.value = name
+        if (!category.isNullOrBlank()) this.category.value = category
+        if (!expiry.isNullOrBlank()) {
+            useDate.value = true
+            expiryText.value = expiry
+        }
+        if (!production.isNullOrBlank()) productionText.value = production
+        refreshPreview()
+    }
+
     fun load(item: CachedItem?) {
         editing = item
         if (item == null) return

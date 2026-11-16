@@ -168,6 +168,8 @@ class PantryRepository(
         result
     }
 
+    suspend fun barcode(code: String) = api.barcode(code)
+
     suspend fun pull() {
         if (!online.value || session.token == null) return
         guard {

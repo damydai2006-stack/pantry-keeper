@@ -39,8 +39,17 @@ interface PantryApi {
     suspend fun batch(ids: List<String>, action: String): BatchOutcome
     suspend fun undo(token: String): UndoOutcome
     suspend fun sync(since: Long): SyncPage
+    suspend fun barcode(code: String): BarcodeHit
     fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit
 }
+
+@Serializable
+data class BarcodeHit(
+    val found: Boolean = false,
+    val name: String? = null,
+    val defaultCategory: String? = null,
+    val reason: String? = null,
+)
 
 @Serializable
 data class PatchBody(val item: CachedItem, val message: String? = null)
@@ -127,6 +136,8 @@ class HttpPantryApi(
         decode(exchange("POST", "/api/v1/items/batch/undo", pantryJson.encodeToString(UndoBody.serializer(), UndoBody(token))))
 
     override suspend fun sync(since: Long): SyncPage = decode(exchange("GET", "/api/v1/sync?since=$since"))
+
+    override suspend fun barcode(code: String): BarcodeHit = decode(exchange("GET", "/api/v1/barcodes/$code"))
 
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit {
         val wsBase = when {

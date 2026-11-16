@@ -252,6 +252,7 @@ fun HomeScreen(
     onAddManual: () -> Unit,
     onEdit: (String) -> Unit,
     onStub: (String) -> Unit,
+    onCapture: (String) -> Unit,
     onMembers: () -> Unit,
     onLogout: () -> Unit,
     onRemoved: () -> Unit,
@@ -324,11 +325,11 @@ fun HomeScreen(
                 Column {
                     SheetRow("扫条形码", "查到名称就自动带出", online, "sheet_scan") {
                         sheet = false
-                        onStub("scan")
+                        onCapture("scan")
                     }
                     SheetRow("拍包装照片", "识别生产日期、保质期或到期日", online, "sheet_photo") {
                         sheet = false
-                        onStub("photo")
+                        onCapture("photo")
                     }
                     SheetRow("手动填写", "手选保质期或直接选到期日", true, "sheet_manual") {
                         sheet = false
@@ -432,6 +433,11 @@ fun ItemFormScreen(vm: ItemFormViewModel, repo: PantryRepository, id: String?, o
     val context = LocalContext.current
     val items by repo.items.collectAsState()
     LaunchedEffect(id, items) {
+        val pending = com.damy.pantry.capture.PendingCapture.prefill
+        if (pending != null && id == null) {
+            com.damy.pantry.capture.PendingCapture.prefill = null
+            vm.prefill(pending.name, pending.expiry, pending.production, pending.category)
+        }
         if (id != null && vm.editing == null) vm.load(items.firstOrNull { it.id == id })
     }
     FormBody(vm, id != null, onBack) { message ->
@@ -592,6 +598,7 @@ private fun MinePage(repo: PantryRepository, online: Boolean, onMembers: () -> U
         Text("我的", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text(repo.session.phoneMask.orEmpty().ifEmpty { "已登录" }, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
         Text(repo.session.displayName ?: "用户", color = TextSecondary)
+        com.damy.pantry.capture.MateDiagnostics.Entry()
         Choice(family?.name ?: "家庭", "查看成员和邀请码", onMembers, "mine_family")
         Choice("每天 09:00", "提醒设置将在后续版本接入", { onStub("remind-time") }, "mine_remind")
         TextButton(onClick = onLogout, modifier = Modifier.testTag("logout").alpha(if (online) 1f else 0.4f)) { Text("退出登录", color = Danger) }
