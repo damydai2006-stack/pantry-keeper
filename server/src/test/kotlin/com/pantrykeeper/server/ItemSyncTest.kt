@@ -612,7 +612,7 @@ class ItemSyncTest {
             val plain = client.post("/api/v1/auth/login") {
                 setBody(TextContent(marker, ContentType.Text.Plain))
             }
-            assertTrue(plain.status == HttpStatusCode.UnsupportedMediaType || plain.status == HttpStatusCode.BadRequest)
+            assertEquals(HttpStatusCode.UnsupportedMediaType, plain.status)
             assertFalse(plain.bodyAsText().contains(number))
             val boom = client.post("/api/v1/test/boom") {
                 header("X-Note", marker)

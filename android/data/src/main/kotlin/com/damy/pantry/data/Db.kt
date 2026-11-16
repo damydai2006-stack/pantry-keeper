@@ -100,7 +100,7 @@ class PrefSession(context: Context, private val crypto: SessionCrypto = AndroidK
  * Local cache. Room's processor cannot read Kotlin 2.4 metadata yet, so this
  * uses the platform SQLite with the same items/meta tables a Room database would.
  */
-class PantryDatabase(context: Context) : SQLiteOpenHelper(context, "pantry.db", null, 2) {
+class PantryDatabase(context: Context) : SQLiteOpenHelper(context, "pantry.db", null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -119,7 +119,9 @@ class PantryDatabase(context: Context) : SQLiteOpenHelper(context, "pantry.db", 
               reminder_tiers TEXT NOT NULL,
               status TEXT NOT NULL,
               rev INTEGER NOT NULL,
-              photo_id TEXT
+              photo_id TEXT,
+              opened_date TEXT,
+              after_open_days INTEGER
             )
             """.trimIndent(),
         )
@@ -128,6 +130,10 @@ class PantryDatabase(context: Context) : SQLiteOpenHelper(context, "pantry.db", 
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE items ADD COLUMN photo_id TEXT")
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE items ADD COLUMN opened_date TEXT")
+            db.execSQL("ALTER TABLE items ADD COLUMN after_open_days INTEGER")
+        }
     }
 
     companion object {
@@ -160,6 +166,8 @@ class SqliteItemCache(private val db: PantryDatabase) : ItemCache {
                     put("shelf_life_value", item.shelfLifeValue)
                     put("shelf_life_unit", item.shelfLifeUnit)
                     put("expiry_basis", item.expiryBasis)
+                    put("opened_date", item.openedDate)
+                    put("after_open_days", item.afterOpenDays)
                     put("reminder_tiers", item.reminderTiers.joinToString(","))
                     put("status", item.status)
                     put("rev", item.rev)
@@ -181,21 +189,29 @@ class SqliteItemCache(private val db: PantryDatabase) : ItemCache {
     }
 }
 
+private fun android.database.Cursor.text(column: String): String? {
+    val index = getColumnIndex(column)
+    if (index < 0 || isNull(index)) return null
+    return getString(index)
+}
+
 private fun android.database.Cursor.toItem(): CachedItem = CachedItem(
-    id = getString(0),
-    name = getString(1),
-    category = getString(2),
-    quantity = getInt(3),
-    location = getString(4),
-    note = getString(5),
-    expiryDate = getString(6),
-    productionDate = getString(7),
-    shelfLifeValue = if (isNull(8)) null else getInt(8),
-    shelfLifeUnit = getString(9),
-    expiryBasis = getString(10),
-    reminderTiers = getString(11).split(',').filter { it.isNotBlank() },
-    status = getString(12),
-    rev = getLong(13),
-    photoId = if (columnCount > 14 && !isNull(14)) getString(14) else null,
+    id = text("id").orEmpty(),
+    name = text("name").orEmpty(),
+    category = text("category").orEmpty(),
+    quantity = getInt(getColumnIndex("quantity")),
+    location = text("location"),
+    note = text("note"),
+    expiryDate = text("expiry_date").orEmpty(),
+    productionDate = text("production_date"),
+    shelfLifeValue = text("shelf_life_value")?.toIntOrNull(),
+    shelfLifeUnit = text("shelf_life_unit"),
+    expiryBasis = text("expiry_basis") ?: "manual_date",
+    openedDate = text("opened_date"),
+    afterOpenDays = text("after_open_days")?.toIntOrNull(),
+    reminderTiers = text("reminder_tiers").orEmpty().split(',').filter { it.isNotBlank() },
+    status = text("status").orEmpty(),
+    rev = text("rev")?.toLongOrNull() ?: 0L,
+    photoId = text("photo_id"),
 )
 

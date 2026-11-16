@@ -10,8 +10,8 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.damy.pantry.data.PantryDatabase
@@ -45,6 +45,7 @@ object ReminderRuntime {
         val time = runCatching { LocalTime.parse(notifyTime ?: "09:00") }.getOrDefault(LocalTime.of(9, 0))
         val now = ZonedDateTime.now(systemZone())
         val next = AlarmMath.nextAlarm(now, time)
+        scheduleCatchUp(context, time, now)
         val alarm = context.getSystemService(AlarmManager::class.java) ?: return
         val pending = pending(context)
         val trigger = next.at.toInstant().toEpochMilli()
@@ -57,13 +58,16 @@ object ReminderRuntime {
         } else {
             alarm.setWindow(AlarmManager.RTC_WAKEUP, trigger, next.windowMillis, pending)
         }
-        val work = PeriodicWorkRequestBuilder<CatchUpWorker>(12, TimeUnit.HOURS).build()
+    }
+
+    fun scheduleCatchUp(context: Context, notify: LocalTime, now: ZonedDateTime = ZonedDateTime.now(systemZone())) {
+        val at = AlarmMath.nextCatchUp(now, notify, sentToday(context))
+        val delay = java.time.Duration.between(now, at).toMillis().coerceAtLeast(0L)
+        val request = OneTimeWorkRequestBuilder<CatchUpWorker>()
+            .setInitialDelay(delay, TimeUnit.MILLISECONDS)
+            .build()
         runCatching {
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                "pantry-catchup",
-                ExistingPeriodicWorkPolicy.UPDATE,
-                work,
-            )
+            WorkManager.getInstance(context).enqueueUniqueWork("pantry-catchup", ExistingWorkPolicy.REPLACE, request)
         }
     }
 
@@ -89,8 +93,7 @@ object ReminderRuntime {
             .setAutoCancel(true)
             .build()
         context.getSystemService(NotificationManager::class.java).notify(41, notification)
-        context.getSharedPreferences("pantry-reminder", Context.MODE_PRIVATE)
-            .edit().putString("sent", java.time.LocalDate.now(systemZone()).toString()).apply()
+        markSent(context)
     }
 
     fun sentToday(context: Context): Boolean {
@@ -98,10 +101,22 @@ object ReminderRuntime {
         return sent == java.time.LocalDate.now(systemZone()).toString()
     }
 
+    fun clearSent(context: Context) {
+        context.getSharedPreferences("pantry-reminder", Context.MODE_PRIVATE).edit().remove("sent").apply()
+    }
+
+    internal fun markSent(context: Context) {
+        context.getSharedPreferences("pantry-reminder", Context.MODE_PRIVATE)
+            .edit().putString("sent", java.time.LocalDate.now(systemZone()).toString()).apply()
+    }
+
     suspend fun deliver(context: Context) {
         withTimeoutOrNull(5_000) { runCatching { beforeSummary?.invoke() } }
-        val items = SqliteItemCache(PantryDatabase.open(context)).snapshot()
-        postSummary(context, summaryText(AppToday.today(), items))
+        if (!sentToday(context)) {
+            val items = SqliteItemCache(PantryDatabase.open(context)).snapshot()
+            val body = summaryText(AppToday.today(), items)
+            if (body.isNotBlank()) postSummary(context, body) else markSent(context)
+        }
         val time = context.getSharedPreferences("pantry", Context.MODE_PRIVATE).getString("notify", "09:00")
         reschedule(context, time)
     }
@@ -147,16 +162,18 @@ class ReminderBootReceiver : BroadcastReceiver() {
 class CatchUpWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         withTimeoutOrNull(5_000) { runCatching { ReminderRuntime.beforeSummary?.invoke() } }
-        val now = java.time.LocalTime.now(systemZone())
         val notify = runCatching {
-            java.time.LocalTime.parse(
+            LocalTime.parse(
                 applicationContext.getSharedPreferences("pantry", Context.MODE_PRIVATE).getString("notify", "09:00"),
             )
-        }.getOrDefault(java.time.LocalTime.of(9, 0))
-        if (AlarmMath.catchUpDue(now, notify, ReminderRuntime.sentToday(applicationContext))) {
+        }.getOrDefault(LocalTime.of(9, 0))
+        val now = ZonedDateTime.now(systemZone())
+        if (AlarmMath.stillTimeToCatchUp(now, notify, ReminderRuntime.sentToday(applicationContext))) {
             val items = SqliteItemCache(PantryDatabase.open(applicationContext)).snapshot()
-            ReminderRuntime.postSummary(applicationContext, summaryText(AppToday.today(), items))
+            val body = summaryText(AppToday.today(), items)
+            if (body.isNotBlank()) ReminderRuntime.postSummary(applicationContext, body) else ReminderRuntime.markSent(applicationContext)
         }
+        ReminderRuntime.scheduleCatchUp(applicationContext, notify)
         return Result.success()
     }
 }

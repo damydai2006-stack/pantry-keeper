@@ -58,6 +58,16 @@ class ReminderShots {
     }
 
     @Test
+    fun sentMarkerClearsForTheNextAccount() {
+        val context = compose.activity
+        context.getSharedPreferences("pantry-reminder", android.content.Context.MODE_PRIVATE)
+            .edit().putString("sent", java.time.LocalDate.now().toString()).apply()
+        check(com.damy.pantry.reminder.ReminderRuntime.sentToday(context))
+        com.damy.pantry.reminder.ReminderRuntime.clearSent(context)
+        check(!com.damy.pantry.reminder.ReminderRuntime.sentToday(context))
+    }
+
+    @Test
     fun reminderList() {
         val home = home(items())
         show { HomeScreen(home.repo, home.list, home.history, today, {}, {}, {}, {}, {}, {}, {}) }
@@ -68,11 +78,22 @@ class ReminderShots {
     @Test
     fun notifyTime() {
         val home = home(emptyList())
+        home.repo.session.notifyTime = "08:30"
         show {
             val scope = rememberCoroutineScope()
             com.damy.pantry.reminder.NotifyTimeScreen(home.repo, scope) {}
         }
         capture("10-notify-time")
+    }
+
+    @Test
+    fun reminderCardOpensTheItem() {
+        var opened: String? = null
+        val home = home(items())
+        show { HomeScreen(home.repo, home.list, home.history, today, {}, { opened = it }, {}, {}, {}, {}, {}) }
+        compose.onNodeWithTag("tab_remind").performClick()
+        compose.onNodeWithTag("item_牛奶").performClick()
+        check(opened == "milk")
     }
 
     @Test
@@ -82,9 +103,11 @@ class ReminderShots {
             val scope = rememberCoroutineScope()
             com.damy.pantry.reminder.NotifyTimeScreen(home.repo, scope) {}
         }
+        org.robolectric.Shadows.shadowOf(compose.activity).denyPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         compose.onNodeWithTag("time_save").performClick()
-        compose.waitForIdle()
-        check(compose.onAllNodesWithTag("notif_explain").fetchSemanticsNodes().isNotEmpty()) { "permission dialog did not open" }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("notif_explain").fetchSemanticsNodes().isNotEmpty()
+        }
         capture("11-notif-explain")
     }
 
@@ -104,6 +127,9 @@ class ReminderShots {
         check(compose.onAllNodesWithTag("retry_banner").fetchSemanticsNodes().isNotEmpty())
         capture("retry-banner")
         PendingPhoto.remove("milk")
+        PendingPhoto.showLost("milk")
+        compose.waitForIdle()
+        capture("m13-photo-lost")
         compose.waitForIdle()
         check(compose.onAllNodesWithTag("retry_banner").fetchSemanticsNodes().isEmpty())
     }

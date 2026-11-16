@@ -1,6 +1,7 @@
 package com.damy.pantry.reminder
 
 import android.Manifest
+import android.app.TimePickerDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -40,9 +41,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.damy.pantry.data.CachedItem
+import com.damy.pantry.data.OfflineException
 import com.damy.pantry.data.PantryRepository
-import com.pantrykeeper.core.reminder.ReminderRules
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
@@ -75,73 +75,46 @@ fun NotificationBanner(onOpen: () -> Unit) {
 }
 
 @Composable
-fun ReminderList(items: List<CachedItem>, today: LocalDate) {
-    val stock = items.filter { it.status == "in_stock" }
-    val groups = com.damy.pantry.data.groupItems(today, stock, "")
-    Column(Modifier.fillMaxSize().background(bg).verticalScroll(rememberScrollState()).padding(20.dp).testTag("remind_list")) {
-        Text("提醒", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text("已过期置顶。档位为空的物品仍在这里，只是不发通知。", fontSize = 16.sp, color = Color(0xFF5A615B), modifier = Modifier.padding(top = 4.dp))
-        if (stock.isEmpty()) {
-            Text("暂无在库物品需要关注", fontSize = 16.sp, color = Color(0xFF5A615B), modifier = Modifier.padding(top = 24.dp).testTag("remind_empty"))
-            return
-        }
-        groups.forEach { group ->
-            val tone = groupTone(group.bucket)
-            Text("${group.title} ${group.items.size}件", fontWeight = FontWeight.Bold, color = tone, modifier = Modifier.padding(top = 16.dp, bottom = 8.dp))
-            group.items.forEach { item ->
-                val expiry = kotlinx.datetime.LocalDate.parse(item.expiryDate)
-                val days = ReminderRules.daysRemaining(today, expiry)
-                val label = com.damy.pantry.data.daysLabel(days)
-                Row(
-                    Modifier.fillMaxWidth().padding(bottom = 8.dp).background(Color.White, RoundedCornerShape(12.dp)).heightIn(min = 72.dp).testTag("remind_${item.name}"),
-                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.width(6.dp).heightIn(min = 72.dp).background(tone))
-                    Column(Modifier.weight(1f).padding(12.dp)) {
-                        Text(item.name, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Text(item.expiryDate, fontSize = 16.sp, color = Color(0xFF3E4640))
-                    }
-                    Text(label, color = tone, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 12.dp))
-                }
-            }
-        }
-    }
-}
-
-private fun groupTone(bucket: com.damy.pantry.data.ListBucket): Color = when (bucket) {
-    com.damy.pantry.data.ListBucket.EXPIRED -> Color(0xFF9B1C1C)
-    com.damy.pantry.data.ListBucket.SOON -> Color(0xFFB54708)
-    com.damy.pantry.data.ListBucket.MONTH -> Color(0xFF8A5A00)
-    com.damy.pantry.data.ListBucket.LATER -> Color(0xFF166534)
-}
-
-@Composable
 fun NotifyTimeScreen(repo: PantryRepository, scope: CoroutineScope, onBack: () -> Unit) {
     val context = LocalContext.current
     var time by remember { mutableStateOf(repo.session.notifyTime ?: "09:00") }
     var explain by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     Column(Modifier.fillMaxSize().background(bg).verticalScroll(rememberScrollState()).padding(20.dp).testTag("notify_time")) {
         TextButton(onClick = onBack) { Text("返回") }
         Text("每天提醒时间", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text("按这台手机的本地时区。默认 09:00。", fontSize = 16.sp, modifier = Modifier.padding(vertical = 8.dp))
-        listOf("07:00", "09:00", "18:00", "21:00").forEach { option ->
-            Text(
-                option,
-                fontSize = 18.sp,
-                fontWeight = if (option == time) FontWeight.Bold else FontWeight.Normal,
-                color = if (option == time) brand else Color(0xFF1A1D1A),
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { time = option }.padding(vertical = 12.dp).testTag("time_$option"),
-            )
-        }
+        Text(
+            time,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold,
+            color = brand,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable {
+                val parts = time.split(":")
+                val hour = parts.getOrNull(0)?.toIntOrNull() ?: 9
+                val minute = parts.getOrNull(1)?.toIntOrNull() ?: 0
+                TimePickerDialog(context, { _, pickedHour, pickedMinute ->
+                    time = formatNotifyTime(pickedHour, pickedMinute)
+                }, hour, minute, true).show()
+            }.padding(vertical = 12.dp).testTag("time_picker"),
+        )
+        error?.let { Text(it, color = Color(0xFF9B1C1C), fontSize = 16.sp, modifier = Modifier.testTag("time_error")) }
         Button(
             onClick = {
-                if (Build.VERSION.SDK_INT >= 33 && !notificationsAllowed(context)) explain = true
-                else scope.launch {
-                    runCatching { repo.updateNotifyTime(time) }
-                    repo.session.notifyTime = time
-                    ReminderRuntime.reschedule(context, time)
-                    onBack()
+                scope.launch {
+                    val saved = runCatching { repo.updateNotifyTime(time) }
+                    if (saved.isFailure) {
+                        error = if (saved.exceptionOrNull() is OfflineException) {
+                            "当前无网络。恢复网络后再修改提醒时间。"
+                        } else {
+                            "提醒时间没有保存。"
+                        }
+                        return@launch
+                    }
+                    error = null
+                    runCatching { ReminderRuntime.reschedule(context, time) }
+                    if (Build.VERSION.SDK_INT >= 33 && !notificationsAllowed(context)) explain = true else onBack()
                 }
             },
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("time_save"),
@@ -151,22 +124,25 @@ fun NotifyTimeScreen(repo: PantryRepository, scope: CoroutineScope, onBack: () -
             onSimulate = { AppToday.simulate(it) },
             onFire = {
                 val items = repo.items.value
-                ReminderRuntime.postSummary(context, summaryText(AppToday.today(), items))
+                if (!ReminderRuntime.sentToday(context)) {
+                    ReminderRuntime.postSummary(context, summaryText(AppToday.today(), items))
+                }
             },
         )
     }
     if (explain) {
         AlertDialog(
-            onDismissRequest = { explain = false },
+            onDismissRequest = { explain = false; onBack() },
             title = { Text("开启到期提醒") },
             text = { Text("用于每天定时发送到期汇总，不会用于营销。", modifier = Modifier.testTag("notif_explain")) },
             confirmButton = {
                 TextButton(onClick = {
                     explain = false
                     launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    onBack()
                 }) { Text("允许通知") }
             },
-            dismissButton = { TextButton(onClick = { explain = false }) { Text("以后再说") } },
+            dismissButton = { TextButton(onClick = { explain = false; onBack() }) { Text("以后再说") } },
         )
     }
 }
@@ -189,15 +165,12 @@ fun ReminderAccessScreen(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(bg).verticalScroll(rememberScrollState()).padding(20.dp).testTag("reminder_access")) {
         TextButton(onClick = onBack) { Text("返回") }
         Text("让提醒准时送达", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text(
-            "每天只发一条汇总。通知、精确闹钟和后台运行都打开后，到点才会响。",
-            fontSize = 16.sp,
-            color = Color(0xFF3E4640),
-            modifier = Modifier.padding(vertical = 8.dp),
-        )
+        Text("每天只发一条汇总。", fontSize = 16.sp, color = Color(0xFF3E4640), modifier = Modifier.padding(top = 8.dp))
+        Text("通知、精确闹钟和后台运行都打开后，", fontSize = 16.sp, color = Color(0xFF3E4640))
+        Text("到点才会响。", fontSize = 16.sp, color = Color(0xFF3E4640))
         AccessRow(
             title = "通知",
-            body = if (notificationsAllowed(context)) "已开启" else "未开启。不开启就收不到每天的汇总。",
+            body = if (notificationsAllowed(context)) "已开启" else "未开启。收不到每天的汇总通知，仍可在提醒清单查看。",
             tag = "access_notifications",
         ) { openNotificationSettings(context) }
         AccessRow(

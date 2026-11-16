@@ -52,9 +52,30 @@ class PendingPhotoTest {
         File(dir, "item-a").writeBytes(byteArrayOf(1, 2, 3))
         PendingPhoto.readFile = { error("cannot read") }
         PendingPhoto.bind(dir)
-        assertEquals(PendingPhoto.LOST, PendingPhoto.lost.value)
+        assertTrue("item-a" in PendingPhoto.lostItems.value)
+        assertEquals(
+            "照片未上传，而且已经不在这台手机里。请到物品编辑页重新拍摄或添加。",
+            PendingPhoto.LOST_BODY,
+        )
         assertTrue(PendingPhoto.items.value.isEmpty())
         assertFalse(File(dir, "item-a").exists())
+        PendingPhoto.dismissLost("item-a")
+        assertTrue(PendingPhoto.lostItems.value.isEmpty())
+    }
+
+    @Test
+    fun retryFileIsRenamedIntoPlaceAndTmpFilesAreIgnored() {
+        val dir = File.createTempFile("pending-atomic", "dir")
+        dir.delete()
+        dir.mkdirs()
+        PendingPhoto.bind(dir)
+        PendingPhoto.holdForItem("item-a", byteArrayOf(4, 4))
+        assertTrue(File(dir, "item-a").isFile)
+        assertFalse(File(dir, "item-a.tmp").exists())
+        File(dir, "item-b.tmp").writeBytes(byteArrayOf(9))
+        PendingPhoto.bind(dir)
+        assertNull(PendingPhoto.bytesFor("item-b"))
+        assertTrue(PendingPhoto.bytesFor("item-a")!!.contentEquals(byteArrayOf(4, 4)))
     }
 
     @Test
@@ -102,6 +123,28 @@ class PendingPhotoTest {
     }
 
     @Test
+    fun offlineNotifyTimeIsNotStoredAndCannotBeReplacedBySync() = runBlocking {
+        val api = TinyApi()
+        val repo = repo(api)
+        repo.session.token = "token"
+        repo.session.notifyTime = "09:00"
+        repo.setOnline(false)
+        assertFailsWith<OfflineException> { repo.updateNotifyTime("18:30") }
+        assertEquals("09:00", repo.session.notifyTime)
+        repo.setOnline(true)
+        api.notifyError = IllegalStateException("down")
+        assertFailsWith<IllegalStateException> { repo.updateNotifyTime("18:30") }
+        assertEquals("09:00", repo.session.notifyTime)
+        api.notifyError = null
+        api.page = SyncPage(rev = 2, notifyTime = "09:00")
+        repo.pull()
+        assertEquals("09:00", repo.session.notifyTime)
+        repo.updateNotifyTime("18:30")
+        assertEquals("18:30", repo.session.notifyTime)
+        assertEquals("18:30", api.savedNotify)
+    }
+
+    @Test
     fun flowUpdatesWhenARetryIsAddedAndRemoved() {
         PendingPhoto.holdForItem("item-a", byteArrayOf(7))
         assertTrue(PendingPhoto.items.value.getValue("item-a").contentEquals(byteArrayOf(7)))
@@ -125,6 +168,8 @@ class PendingPhotoTest {
 private class TinyApi : PantryApi {
     var page = SyncPage()
     var syncError: Exception? = null
+    var notifyError: Exception? = null
+    var savedNotify: String? = null
     override suspend fun requestCode(phone: String) = Unit
     override suspend fun login(phone: String, code: String) = LoginResult("u", "用户", "token")
     override suspend fun logout() = Unit
@@ -149,5 +194,9 @@ private class TinyApi : PantryApi {
     override suspend fun barcode(code: String) = BarcodeHit(found = false)
     override suspend fun uploadPhoto(itemId: String, bytes: ByteArray) = error("unused")
     override suspend fun photoThumb(photoId: String) = error("unused")
+    override suspend fun updateNotifyTime(time: String) {
+        notifyError?.let { throw it }
+        savedNotify = time
+    }
     override fun openSocket(onText: (String) -> Unit, onClosed: () -> Unit): () -> Unit = {}
 }

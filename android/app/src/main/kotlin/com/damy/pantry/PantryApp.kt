@@ -30,14 +30,15 @@ class PantryApp : Application() {
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         )
         opened.message?.let { repo.notice.value = it }
-        if (repo.notice.value == null) com.damy.pantry.data.PendingPhoto.lost.value?.let { repo.notice.value = it }
         com.damy.pantry.reminder.ReminderRuntime.beforeSummary = {
             if (session.token != null) repo.pull()
         }
         repo.onLocalChange = {
             val armed = repo.session.token != null && repo.family.value != null
-            if (!armed) com.damy.pantry.reminder.ReminderRuntime.cancel(this)
-            else com.damy.pantry.reminder.ReminderRuntime.reschedule(this, repo.session.notifyTime)
+            if (!armed) {
+                com.damy.pantry.reminder.ReminderRuntime.cancel(this)
+                com.damy.pantry.reminder.ReminderRuntime.clearSent(this)
+            } else com.damy.pantry.reminder.ReminderRuntime.reschedule(this, repo.session.notifyTime)
         }
         if (session.token != null && session.loadFamily() != null) {
             com.damy.pantry.reminder.ReminderRuntime.reschedule(this, session.notifyTime)

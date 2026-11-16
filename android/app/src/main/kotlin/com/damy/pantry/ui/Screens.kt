@@ -40,8 +40,11 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.AlertDialog
@@ -70,6 +73,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -328,7 +332,7 @@ fun HomeScreen(
         Box(Modifier.weight(1f)) {
             when (tab) {
                 "list" -> ListPage(repo, listVm, today, online, onEdit) { if (online) sheet = true else listVm.hint.value = "恢复网络后再修改" }
-                "remind" -> com.damy.pantry.reminder.ReminderList(repo.items.collectAsState().value, today)
+                "remind" -> ReminderPage(repo, today, onEdit)
                 "history" -> HistoryPage(repo, historyVm, online)
                 else -> MinePage(repo, online, onMembers, onStub, onNickname) {
                     scope.launch {
@@ -354,11 +358,13 @@ fun HomeScreen(
         } else if (historyVm.selecting.collectAsState().value && tab == "history") {
             HistoryBar(historyVm)
         } else {
+            val stockNow = repo.items.collectAsState().value.filter { it.status == "in_stock" }
+            val remindBadge = stockNow.count { ReminderRules.daysRemaining(today, com.damy.pantry.data.effectiveExpiry(it)) <= 7 }
             NavigationBar(containerColor = Surface) {
-                Tab("list", "清单", Icons.Filled.Home, tab) { tab = "list" }
-                Tab("remind", "提醒", Icons.Filled.Info, tab) { tab = "remind" }
-                Tab("history", "历史", Icons.Filled.DateRange, tab) { tab = "history" }
-                Tab("mine", "我的", Icons.Filled.Person, tab) { tab = "mine" }
+                Tab("list", "清单", Icons.Filled.Home, tab, 0) { tab = "list" }
+                Tab("remind", "提醒", Icons.Filled.Notifications, tab, remindBadge) { tab = "remind" }
+                Tab("history", "历史", Icons.Filled.DateRange, tab, 0) { tab = "history" }
+                Tab("mine", "我的", Icons.Filled.Person, tab, 0) { tab = "mine" }
             }
         }
     }
@@ -378,6 +384,32 @@ fun HomeScreen(
 }
 
 @Composable
+private fun ReminderPage(repo: PantryRepository, today: LocalDate, onEdit: (String) -> Unit) {
+    val items by repo.items.collectAsState()
+    val thumbs by repo.thumbs.collectAsState()
+    val stock = items.filter { it.status == "in_stock" }
+    val groups = com.damy.pantry.data.groupItems(today, stock, "")
+    LaunchedEffect(stock.map { it.photoId }) {
+        stock.mapNotNull { it.photoId }.distinct().forEach { repo.ensureThumb(it) }
+    }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).testTag("remind_list")) {
+        Text("提醒", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+        Text("已过期置顶。档位为空的物品仍在这里，只是不发通知。", fontSize = 16.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
+        if (stock.isEmpty()) {
+            Text("暂无在库物品需要关注", fontSize = 16.sp, color = TextSecondary, modifier = Modifier.padding(top = 24.dp).testTag("remind_empty"))
+            return
+        }
+        groups.forEach { group ->
+            Text("${group.title} ${group.items.size}件", fontWeight = FontWeight.Bold, color = bucketColor(group.bucket), modifier = Modifier.padding(top = 16.dp, bottom = 8.dp))
+            group.items.forEach { item ->
+                ItemCard(item, today, selecting = false, checked = false, thumbs[item.photoId], { onEdit(item.id) }, {})
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
 private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate, online: Boolean, onEdit: (String) -> Unit, onAdd: () -> Unit) {
     val scope = rememberCoroutineScope()
     val items by repo.items.collectAsState()
@@ -393,7 +425,7 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
     LaunchedEffect(stock.map { it.photoId }) {
         stock.mapNotNull { it.photoId }.distinct().forEach { repo.ensureThumb(it) }
     }
-    val expired = stock.count { ReminderRules.daysRemaining(today, LocalDate.parse(it.expiryDate)) < 0 }
+    val expired = stock.count { ReminderRules.daysRemaining(today, com.damy.pantry.data.effectiveExpiry(it)) < 0 }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -404,29 +436,36 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
                 }
             }
             val pendingPhotos by com.damy.pantry.data.PendingPhoto.items.collectAsState()
-            val photoLost by com.damy.pantry.data.PendingPhoto.lost.collectAsState()
+            val lostPhotos by com.damy.pantry.data.PendingPhoto.lostItems.collectAsState()
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
                 if (!online) OfflineBanner(notice)
-                photoLost?.let {
-                    Text(it, color = Danger, fontSize = 16.sp, modifier = Modifier.padding(bottom = 8.dp).testTag("photo_lost"))
-                }
                 pendingPhotos.forEach { (retryId, bytes) ->
                     Row(
-                        Modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("retry_banner"),
+                        Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(12.dp)).background(ExpiredSoft).padding(start = 12.dp).testTag("retry_banner"),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("照片未上传，可在编辑页重试", modifier = Modifier.weight(1f), color = Danger, fontSize = 16.sp)
+                        Text(com.damy.pantry.data.PendingPhoto.RETRY_BODY, modifier = Modifier.weight(1f), color = Color(0xFF8B1A14), fontSize = 16.sp)
                         TextButton(onClick = {
                             scope.launch {
                                 val prepared = runCatching { com.damy.pantry.capture.compressForUpload(bytes) }.getOrElse {
-                                    repo.notice.value = "照片未上传，可在编辑页重试"
                                     return@launch
                                 }
                                 runCatching { repo.uploadPhoto(retryId, prepared) }
                                     .onSuccess { com.damy.pantry.data.PendingPhoto.remove(retryId); vm.toast.value = "照片已上传" }
-                                    .onFailure { repo.notice.value = "照片未上传，可在编辑页重试" }
+                                    .onFailure { }
                             }
-                        }, modifier = Modifier.heightIn(min = 48.dp).testTag("retry_photo")) { Text("重试") }
+                        }, modifier = Modifier.heightIn(min = 48.dp).testTag("retry_photo")) { Text("重试", color = Color(0xFF8B1A14)) }
+                    }
+                }
+                lostPhotos.forEach { lostId ->
+                    Column(
+                        Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(12.dp)).background(ExpiredSoft).padding(12.dp).testTag("photo_lost"),
+                    ) {
+                        Text(com.damy.pantry.data.PendingPhoto.LOST_BODY, color = Color(0xFF8B1A14), fontSize = 16.sp)
+                        Row {
+                            TextButton(onClick = { onEdit(lostId) }, modifier = Modifier.heightIn(min = 48.dp).testTag("photo_lost_edit")) { Text("去编辑", color = Color(0xFF8B1A14)) }
+                            TextButton(onClick = { com.damy.pantry.data.PendingPhoto.dismissLost(lostId) }, modifier = Modifier.heightIn(min = 48.dp).testTag("photo_lost_dismiss")) { Text("知道了", color = Color(0xFF8B1A14)) }
+                        }
                     }
                 }
                 NotificationOffBanner()
@@ -465,12 +504,12 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
 
 @Composable
 private fun ItemCard(item: CachedItem, today: LocalDate, selecting: Boolean, checked: Boolean, thumb: ByteArray?, onClick: () -> Unit, onCheck: () -> Unit) {
-    val expiry = LocalDate.parse(item.expiryDate)
+    val expiry = com.damy.pantry.data.effectiveExpiry(item)
     val days = ReminderRules.daysRemaining(today, expiry)
     val bucket = com.damy.pantry.data.listBucket(today, expiry)
     val label = daysLabel(days)
     Row(
-        Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(card).background(Surface).clickable(onClick = onClick).heightIn(min = 88.dp),
+        Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(card).background(Surface).clickable(onClick = onClick).heightIn(min = 88.dp).testTag("item_${item.name}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.width(6.dp).height(88.dp).background(bucketColor(bucket)))
@@ -700,8 +739,15 @@ private fun MinePage(repo: PantryRepository, online: Boolean, onMembers: () -> U
         com.damy.pantry.capture.MateDiagnostics.Entry()
         Choice(repo.session.displayName?.takeIf { it.isNotBlank() && it != "用户" } ?: "设置昵称", "家庭成员看到的名字", onNickname, "mine_nickname")
         Choice(family?.name ?: "家庭", "查看成员和邀请码", onMembers, "mine_family")
+        val notifOff = !com.damy.pantry.reminder.notificationsAllowed(LocalContext.current)
         Choice("每天 ${repo.session.notifyTime ?: "09:00"}", "按这台手机的本地时区", { onStub("remind-time") }, "mine_remind")
-        Choice("提醒权限", "通知、精确闹钟和后台运行", { onStub("remind-access") }, "mine_access")
+        Choice(
+            "提醒权限",
+            if (notifOff) "未开启通知，仍可在提醒清单查看" else "通知、精确闹钟和后台运行",
+            { onStub("remind-access") },
+            "mine_access",
+            warning = notifOff,
+        )
         val context = LocalContext.current
         TextButton(onClick = {
             if (!online) toast(context, "当前无网络。恢复网络后再退出，才能注销服务器上的会话。") else onLogout()
@@ -1000,21 +1046,31 @@ private fun RowScope.Action(label: String, tag: String, enabled: Boolean, danger
 }
 
 @Composable
-private fun RowScope.Tab(id: String, label: String, icon: ImageVector, current: String, onClick: () -> Unit) {
+private fun RowScope.Tab(id: String, label: String, icon: ImageVector, current: String, badge: Int, onClick: () -> Unit) {
     NavigationBarItem(
         selected = current == id,
         onClick = onClick,
-        icon = { Icon(icon, contentDescription = label) },
+        icon = {
+            if (badge > 0) {
+                BadgedBox(badge = { Badge(modifier = Modifier.testTag("tab_${id}_badge")) { Text(badge.toString()) } }) {
+                    Icon(icon, contentDescription = label)
+                }
+            } else {
+                Icon(icon, contentDescription = label)
+            }
+        },
         label = { Text(label, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
         modifier = Modifier.testTag("tab_$id"),
     )
 }
 
 @Composable
-private fun Choice(title: String, subtitle: String, onClick: () -> Unit, tag: String) {
-    Column(Modifier.fillMaxWidth().padding(top = 12.dp).clip(card).background(Surface).clickable(onClick = onClick).padding(16.dp).testTag(tag).heightIn(min = 48.dp)) {
-        Text(title, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-        Text(subtitle, color = TextSecondary, fontSize = 16.sp)
+private fun Choice(title: String, subtitle: String, onClick: () -> Unit, tag: String, warning: Boolean = false) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 12.dp).clip(card).background(if (warning) ExpiredSoft else Surface).clickable(onClick = onClick).padding(16.dp).testTag(tag).heightIn(min = 48.dp),
+    ) {
+        Text(title, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = if (warning) Color(0xFF8B1A14) else Text)
+        Text(subtitle, color = if (warning) Color(0xFF8B1A14) else TextSecondary, fontSize = 16.sp)
     }
 }
 

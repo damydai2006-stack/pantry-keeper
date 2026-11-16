@@ -27,11 +27,28 @@ class AlarmMathTest {
     }
 
     @Test
-    fun catchUpOnlyBeforeNoonWhenUnsent() {
-        assertTrue(AlarmMath.catchUpDue(LocalTime.of(10, 0), LocalTime.of(9, 0), sentToday = false))
-        assertFalse(AlarmMath.catchUpDue(LocalTime.of(8, 0), LocalTime.of(9, 0), sentToday = false))
-        assertFalse(AlarmMath.catchUpDue(LocalTime.of(10, 0), LocalTime.of(9, 0), sentToday = true))
-        assertFalse(AlarmMath.catchUpDue(LocalTime.of(12, 0), LocalTime.of(9, 0), sentToday = false))
+    fun catchUpRunsAfterNotifyUntilTheDayEnds() {
+        val morning = ZonedDateTime.of(2026, 11, 15, 8, 0, 0, 0, zone)
+        val before = AlarmMath.nextCatchUp(morning, LocalTime.of(9, 0), sentToday = false)
+        assertEquals(9, before.hour)
+        assertEquals(15, before.minute)
+        assertEquals(15, before.dayOfMonth)
+        val lateMorning = ZonedDateTime.of(2026, 11, 15, 10, 0, 0, 0, zone)
+        val soon = AlarmMath.nextCatchUp(lateMorning, LocalTime.of(9, 0), sentToday = false)
+        assertEquals(lateMorning, soon)
+        val evening = ZonedDateTime.of(2026, 11, 15, 19, 0, 0, 0, zone)
+        val afternoon = AlarmMath.nextCatchUp(evening, LocalTime.of(18, 0), sentToday = false)
+        assertEquals(evening, afternoon)
+        val almostMidnight = ZonedDateTime.of(2026, 11, 15, 23, 50, 0, 0, zone)
+        assertTrue(AlarmMath.stillTimeToCatchUp(almostMidnight, LocalTime.of(21, 0), sentToday = false))
+        val sent = AlarmMath.nextCatchUp(lateMorning, LocalTime.of(9, 0), sentToday = true)
+        assertEquals(16, sent.dayOfMonth)
+        assertEquals(9, sent.hour)
+        val afterMidnight = ZonedDateTime.of(2026, 11, 16, 0, 10, 0, 0, zone)
+        assertFalse(AlarmMath.stillTimeToCatchUp(afterMidnight, LocalTime.of(21, 0), sentToday = false))
+        val nextDay = AlarmMath.nextCatchUp(afterMidnight, LocalTime.of(21, 0), sentToday = false)
+        assertEquals(16, nextDay.dayOfMonth)
+        assertEquals(21, nextDay.hour)
     }
 
     @Test
@@ -42,7 +59,7 @@ class AlarmMathTest {
         val expiredDay2 = item("米", "2026-11-13", emptyList())
         val phrases = duePhrases(today, listOf(dueToday, expiredDay1, expiredDay2))
         assertEquals(listOf("牛奶今天到期", "酱油已过期 1 天"), phrases)
-        assertTrue(summaryText(today, listOf(dueToday, expiredDay1)).startsWith("2 件物品需要注意"))
+        assertEquals("1 件已过期，1 件将在 7 天内到期", summaryText(today, listOf(dueToday, expiredDay1)))
     }
 
     @Test
@@ -54,12 +71,30 @@ class AlarmMathTest {
     }
 
     @Test
-    fun summaryStopsAfterFiveNames() {
+    fun summaryCountsGroupsAndSkipsNames() {
         val today = LocalDate(2026, 11, 15)
         val items = (1..6).map { item("物$it", "2026-11-15", listOf("D5")) }
-        val text = summaryText(today, items)
-        assertTrue(text.startsWith("6 件物品需要注意"))
-        assertTrue(text.contains("等 1 件"))
+        assertEquals("6 件将在 7 天内到期", summaryText(today, items))
+        assertFalse(summaryText(today, items).contains("物1"))
+    }
+
+    @Test
+    fun openedMedicineUsesTheEarlierDate() {
+        val today = LocalDate(2026, 11, 15)
+        val opened = item("感冒灵", "2026-12-01", listOf("D5")).copy(
+            category = "medicine",
+            openedDate = "2026-11-10",
+            afterOpenDays = 5,
+        )
+        val sealed = opened.copy(openedDate = null, afterOpenDays = null)
+        assertEquals(listOf("感冒灵今天到期"), duePhrases(today, listOf(opened)))
+        assertTrue(duePhrases(today, listOf(sealed)).isEmpty())
+    }
+
+    @Test
+    fun notifyTimeFormatsHourAndMinute() {
+        assertEquals("08:30", formatNotifyTime(8, 30))
+        assertEquals("21:05", formatNotifyTime(21, 5))
     }
 
     @Test
