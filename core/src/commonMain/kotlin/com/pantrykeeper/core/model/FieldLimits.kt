@@ -6,6 +6,7 @@ object FieldLimits {
     const val ITEM_NAME_MAX = 40
     const val NOTE_MAX = 200
     const val LOCATION_MAX = 12
+    const val DISPLAY_NAME_MAX = 20
 
     fun codePoints(value: String): Int = value.codePointCount(0, value.length)
 
@@ -29,6 +30,11 @@ object FieldLimits {
     fun noteError(note: String?): String? {
         if (note == null) return null
         return if (codePoints(note) <= NOTE_MAX) null else "备注最多 200 个字"
+    }
+
+    fun displayNameError(name: String): String? {
+        val n = codePoints(name.trim())
+        return if (n in 1..DISPLAY_NAME_MAX) null else "昵称需要 1 到 20 个字"
     }
 
     fun locationError(location: String?): String? {

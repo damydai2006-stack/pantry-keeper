@@ -173,6 +173,37 @@ fun FamilyChooseScreen(onCreate: () -> Unit, onJoin: () -> Unit, onLogout: () ->
 }
 
 @Composable
+fun NicknameScreen(repo: PantryRepository, onBack: () -> Unit, onSaved: () -> Unit) {
+    var name by remember { mutableStateOf(repo.session.displayName?.takeIf { it.isNotBlank() && it != "用户" }.orEmpty()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    Column(Modifier.fillMaxSize().background(Bg).padding(20.dp)) {
+        TopBar("昵称", onBack)
+        Text("这个名字会显示在家庭成员列表里。", color = TextSecondary, fontSize = 16.sp)
+        OutlinedTextField(
+            name,
+            { name = FieldLimits.takeCodePoints(it, FieldLimits.DISPLAY_NAME_MAX) },
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp).testTag("nickname"),
+            placeholder = { Text("1 到 20 个字") },
+            singleLine = true,
+        )
+        error?.let { Text(it, color = Danger, fontSize = 16.sp, modifier = Modifier.testTag("nickname_error")) }
+        Button(
+            onClick = {
+                scope.launch {
+                    runCatching { repo.updateDisplayName(name) }
+                        .onSuccess { onSaved() }
+                        .onFailure { error = userFacingMessage(it) }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().padding(top = 16.dp).heightIn(min = 48.dp).testTag("nickname_save"),
+            shape = button,
+            colors = ButtonDefaults.buttonColors(containerColor = Brand),
+        ) { Text("保存") }
+    }
+}
+
+@Composable
 fun FamilyCreateScreen(repo: PantryRepository, onBack: () -> Unit, onDone: () -> Unit) {
     var name by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
@@ -262,6 +293,7 @@ fun HomeScreen(
     onMembers: () -> Unit,
     onLogout: () -> Unit,
     onRemoved: () -> Unit,
+    onNickname: () -> Unit = {},
 ) {
     var tab by remember { mutableStateOf("list") }
     var sheet by remember { mutableStateOf(false) }
@@ -292,7 +324,7 @@ fun HomeScreen(
                 "list" -> ListPage(repo, listVm, today, online, onEdit) { if (online) sheet = true else listVm.hint.value = "恢复网络后再修改" }
                 "remind" -> StubBody("提醒", "提醒清单将在后续版本接入。分组仍是已过期、7 天内（含今天）、8–30 天和更远。")
                 "history" -> HistoryPage(repo, historyVm, online)
-                else -> MinePage(repo, online, onMembers, onStub) {
+                else -> MinePage(repo, online, onMembers, onStub, onNickname) {
                     scope.launch {
                         repo.logout()
                         onLogout()
@@ -607,13 +639,14 @@ private fun HistoryPage(repo: PantryRepository, vm: HistoryViewModel, online: Bo
 }
 
 @Composable
-private fun MinePage(repo: PantryRepository, online: Boolean, onMembers: () -> Unit, onStub: (String) -> Unit, onLogout: () -> Unit) {
+private fun MinePage(repo: PantryRepository, online: Boolean, onMembers: () -> Unit, onStub: (String) -> Unit, onNickname: () -> Unit, onLogout: () -> Unit) {
     val family by repo.family.collectAsState()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Text("我的", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text(repo.session.phoneMask.orEmpty().ifEmpty { "已登录" }, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
         Text(repo.session.displayName ?: "用户", color = TextSecondary)
         com.damy.pantry.capture.MateDiagnostics.Entry()
+        Choice(repo.session.displayName?.takeIf { it.isNotBlank() && it != "用户" } ?: "设置昵称", "家庭成员看到的名字", onNickname, "mine_nickname")
         Choice(family?.name ?: "家庭", "查看成员和邀请码", onMembers, "mine_family")
         Choice("每天 09:00", "提醒设置将在后续版本接入", { onStub("remind-time") }, "mine_remind")
         val context = LocalContext.current

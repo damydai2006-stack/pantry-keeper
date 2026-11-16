@@ -148,6 +148,18 @@ class SessionSafetyTest {
     }
 
     @Test
+    fun displayNameUpdateReplacesTheDefault() = runTest(dispatcher) {
+        val api = ScriptApi()
+        val repo = repo(api, MemoryCache())
+        repo.session.token = "token"
+        repo.session.displayName = "用户"
+        val me = repo.updateDisplayName("小米")
+        assertEquals("小米", me.displayName)
+        assertEquals("小米", repo.session.displayName)
+        assertFailsWith<PantryCallException> { repo.updateDisplayName(" ") }
+    }
+
+    @Test
     fun limitsCountCodePoints() {
         val emoji = "😀"
         assertEquals(emoji + emoji, FieldLimits.takeCodePoints(emoji.repeat(3), 2))
@@ -190,6 +202,7 @@ private class ScriptApi : PantryApi {
     override suspend fun requestCode(phone: String) = Unit
     override suspend fun login(phone: String, code: String) = loginResult
     override suspend fun logout() = Unit
+    override suspend fun updateDisplayName(name: String) = meResult.copy(displayName = name)
     override suspend fun me(): Me {
         meError?.let { throw it }
         return meResult

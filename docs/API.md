@@ -20,6 +20,7 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| PATCH | `/me` | `{display_name}`。1–20 个字，按码点。家庭成员列表用这个名字 |
 | GET | `/me` | 不含手机号。未加入家庭时 `family_id` 为空 |
 | PUT | `/me/settings` | `notify_time`，`HH:mm` |
 | POST | `/families` | 创建。名称 2–20 字。创建者是管理员，并得到 6 位、7 天邀请码 |

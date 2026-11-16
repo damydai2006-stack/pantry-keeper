@@ -462,6 +462,28 @@ class ItemSyncTest {
     }
 
     @Test
+    fun memberCanReplaceTheDefaultDisplayName() = app { client ->
+        val token = login(client, phone(37))
+        val created = createFamily(client, token, "昵称家庭")
+        val renamed = client.patch("/api/v1/me") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(com.pantrykeeper.server.DisplayNameRequest("小米"))
+        }
+        assertEquals(HttpStatusCode.OK, renamed.status)
+        assertEquals("小米", renamed.body<MeResponse>().displayName)
+        val family = client.get("/api/v1/families/current") { bearer(token) }.body<com.pantrykeeper.server.family.FamilyView>()
+        assertEquals("小米", family.members.single().displayName)
+        assertEquals(created.name, family.name)
+        val blank = client.patch("/api/v1/me") {
+            bearer(token)
+            contentType(ContentType.Application.Json)
+            setBody(com.pantrykeeper.server.DisplayNameRequest(" "))
+        }
+        assertEquals(HttpStatusCode.BadRequest, blank.status)
+    }
+
+    @Test
     fun foreignPhotoIsRejectedBeforeAnyFileIsWritten() = app { client ->
         val owner = login(client, phone(35))
         val stranger = login(client, phone(36))
@@ -652,7 +674,7 @@ private object Box {
                 "PANTRY_PHONE_HMAC_KEY" to Base64.getEncoder().encodeToString(mac),
                 "AUTH_MODE" to "test",
                 "AUTH_TEST_CODE" to testCode,
-                "AUTH_TEST_PHONES" to (21..36).joinToString(",") { phone(it) },
+                "AUTH_TEST_PHONES" to (21..40).joinToString(",") { phone(it) },
                 "PANTRY_COOKIE_SECURE" to "true",
                 "PANTRY_DATA_DIR" to dir.toString(),
             ),

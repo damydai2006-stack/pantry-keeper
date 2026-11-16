@@ -36,6 +36,7 @@ import com.damy.pantry.ui.HomeScreen
 import com.damy.pantry.ui.ItemFormScreen
 import com.damy.pantry.ui.LoginScreen
 import com.damy.pantry.ui.MembersScreen
+import com.damy.pantry.ui.NicknameScreen
 import com.damy.pantry.ui.PantryTheme
 import com.damy.pantry.ui.StubScreen
 import kotlinx.coroutines.launch
@@ -103,9 +104,19 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
         composable("login") {
             val vm: LoginViewModel = viewModel(factory = repo.factory { LoginViewModel(repo) })
             LoginScreen(vm, onFamily = {
-                nav.navigate("family") { popUpTo("login") { inclusive = true } }
+                nav.navigate(if (needsDisplayName(repo)) "nickname/family" else "family") { popUpTo("login") { inclusive = true } }
             }, onHome = {
-                nav.navigate("home") { popUpTo("login") { inclusive = true } }
+                nav.navigate(if (needsDisplayName(repo)) "nickname/home" else "home") { popUpTo("login") { inclusive = true } }
+            })
+        }
+        composable("nickname/{next}") { entry ->
+            val next = entry.arguments?.getString("next").orEmpty()
+            NicknameScreen(repo, onBack = { nav.popBackStack() }, onSaved = {
+                when (next) {
+                    "home" -> nav.navigate("home") { popUpTo("nickname/$next") { inclusive = true } }
+                    "family" -> nav.navigate("family") { popUpTo("nickname/$next") { inclusive = true } }
+                    else -> nav.popBackStack()
+                }
             })
         }
         composable("family") {
@@ -144,6 +155,7 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
                 onStub = { nav.navigate("stub/$it") },
                 onCapture = { nav.navigate("capture/$it") },
                 onMembers = { nav.navigate("members") },
+                onNickname = { nav.navigate("nickname/stay") },
                 onLogout = { nav.navigate("login") { popUpTo(nav.graph.id) { inclusive = true } } },
                 onRemoved = { nav.navigate("family") { popUpTo("home") { inclusive = true } } },
             )
@@ -182,6 +194,11 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
             StubScreen(entry.arguments?.getString("name").orEmpty()) { nav.popBackStack() }
         }
     }
+}
+
+private fun needsDisplayName(repo: PantryRepository): Boolean {
+    val name = repo.session.displayName
+    return name.isNullOrBlank() || name == "用户"
 }
 
 private fun <T : ViewModel> PantryRepository.factory(create: () -> T): ViewModelProvider.Factory =

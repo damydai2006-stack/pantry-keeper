@@ -192,6 +192,7 @@ private object QuietApi : PantryApi {
     override suspend fun login(phone: String, code: String) = error("unused")
     override suspend fun logout() = Unit
     override suspend fun me() = error("unused")
+    override suspend fun updateDisplayName(name: String) = error("unused")
     override suspend fun createFamily(name: String) = error("unused")
     override suspend fun joinFamily(code: String) = error("unused")
     override suspend fun leaveFamily() = Unit

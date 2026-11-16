@@ -165,6 +165,7 @@ private class FakeApi : PantryApi {
     override suspend fun login(phone: String, code: String) = LoginResult("u", "用户", "token")
     override suspend fun logout() = Unit
     override suspend fun me() = Me("u", "用户", "09:00", "f")
+    override suspend fun updateDisplayName(name: String) = Me("u", name, "09:00", "f")
     override suspend fun createFamily(name: String) = family()
     override suspend fun joinFamily(code: String) = family()
     override suspend fun leaveFamily() = Unit

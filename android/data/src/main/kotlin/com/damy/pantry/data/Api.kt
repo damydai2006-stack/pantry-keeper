@@ -26,6 +26,7 @@ interface PantryApi {
     suspend fun login(phone: String, code: String): LoginResult
     suspend fun logout()
     suspend fun me(): Me
+    suspend fun updateDisplayName(name: String): Me
     suspend fun createFamily(name: String): Family
     suspend fun joinFamily(code: String): Family
     suspend fun leaveFamily()
@@ -98,6 +99,9 @@ class HttpPantryApi(
     }
 
     override suspend fun me(): Me = decode(exchange("GET", "/api/v1/me"))
+
+    override suspend fun updateDisplayName(name: String): Me =
+        decode(exchange("PATCH", "/api/v1/me", pantryJson.encodeToString(DisplayNameBody.serializer(), DisplayNameBody(name))))
 
     override suspend fun createFamily(name: String): Family =
         decode(exchange("POST", "/api/v1/families", pantryJson.encodeToString(NameBody.serializer(), NameBody(name))))
@@ -201,6 +205,9 @@ private data class LoginWire(val userId: String, val displayName: String, val to
 
 @Serializable
 private data class NameBody(val name: String)
+
+@Serializable
+private data class DisplayNameBody(val displayName: String)
 
 @Serializable
 private data class JoinBody(val code: String)

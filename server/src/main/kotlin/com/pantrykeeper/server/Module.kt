@@ -188,6 +188,13 @@ fun Application.module(
                 val familyId = families.currentFamilyId(ctx.userId)
                 call.respond(MeResponse(profile.userId.toString(), profile.displayName, profile.notifyTime, familyId?.toString()))
             }
+            patch("/me") {
+                val ctx = call.requireSession(sessions, config)
+                val body = call.receive<DisplayNameRequest>()
+                val profile = sessions.updateDisplayName(ctx.userId, body.displayName)
+                val familyId = families.currentFamilyId(ctx.userId)
+                call.respond(MeResponse(profile.userId.toString(), profile.displayName, profile.notifyTime, familyId?.toString()))
+            }
             put("/me/settings") {
                 val ctx = call.requireSession(sessions, config)
                 val body = call.receive<SettingsRequest>()
@@ -374,6 +381,9 @@ data class MeResponse(val userId: String, val displayName: String, val notifyTim
 
 @Serializable
 data class SettingsRequest(val notifyTime: String)
+
+@kotlinx.serialization.Serializable
+data class DisplayNameRequest(val displayName: String)
 
 @Serializable
 data class CreateFamilyRequest(val name: String)

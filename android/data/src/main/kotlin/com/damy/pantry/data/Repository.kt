@@ -128,6 +128,13 @@ class PantryRepository(
         joined
     }
 
+    suspend fun updateDisplayName(name: String): Me = online {
+        FieldLimits.displayNameError(name)?.let { throw PantryCallException(400, "invalid_name", it) }
+        val me = api.updateDisplayName(name.trim())
+        session.displayName = me.displayName
+        me
+    }
+
     suspend fun renameFamily(name: String): Family = online {
         FieldLimits.familyNameError(name)?.let { throw PantryCallException(400, "invalid_name", it) }
         remember(api.renameFamily(name.trim()))
