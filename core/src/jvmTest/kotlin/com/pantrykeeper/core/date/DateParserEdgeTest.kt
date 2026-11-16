@@ -49,6 +49,22 @@ class DateParserEdgeTest {
     }
 
     @Test
+    fun lotCodeAfterAFullDateIsKept() {
+        assertEquals(LocalDate(2027, 3, 15), DateParser.parse("保质期至 2027-03-15 L2301", today).resolvedExpiry)
+        assertTrue(DateParser.parse("保质期至 2027-03-15 L2301", today).confident)
+        assertEquals(LocalDate(2027, 3, 15), DateParser.parse("EXP 2027-03-15 G2", today).resolvedExpiry)
+        assertEquals(LocalDate(2027, 3, 15), DateParser.parse("保质期至 2027.03.15 包装日期见喷码", today).resolvedExpiry)
+    }
+
+    @Test
+    fun singleDigitMonthIsNotYellowByItself() {
+        val parsed = DateParser.parse("有效期至 2027-3-15", today)
+        assertEquals(LocalDate(2027, 3, 15), parsed.resolvedExpiry)
+        assertTrue(parsed.confident)
+        assertFalse(parsed.needsConfirm)
+    }
+
+    @Test
     fun monthDayWithoutALabelOnTheSameLineIsIgnored() {
         val parsed = DateParser.parse("1.5\n有效期至", today)
         assertFalse(parsed.recognized)

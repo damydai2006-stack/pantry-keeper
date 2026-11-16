@@ -1,5 +1,6 @@
 package com.damy.pantry.capture
 
+import com.damy.pantry.data.PendingPhoto
 import com.pantrykeeper.core.date.DateParser
 import com.pantrykeeper.core.date.ShelfLife
 import kotlinx.datetime.LocalDate
@@ -70,7 +71,9 @@ val OCR_SAMPLE_EXPECTATIONS = listOf(
 
 object PendingCapture {
     var prefill: CapturePrefill? = null
-    var jpeg: ByteArray? = null
+    var jpeg: ByteArray?
+        get() = PendingPhoto.jpeg
+        set(value) { PendingPhoto.jpeg = value }
 }
 
 data class SampleHit(val id: String, val clear: Boolean, val hit: Boolean, val detail: String)

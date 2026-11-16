@@ -190,6 +190,50 @@ class SessionSafetyTest {
     }
 
     @Test
+    fun pendingPhotoDoesNotAttachToTheNextItem() {
+        PendingPhoto.jpeg = byteArrayOf(1, 2, 3)
+        PendingPhoto.clear()
+        assertNull(PendingPhoto.bytesFor("item-b"))
+        PendingPhoto.jpeg = byteArrayOf(9, 9)
+        assertTrue(PendingPhoto.bytesFor("item-a")!!.contentEquals(byteArrayOf(9, 9)))
+        PendingPhoto.clear()
+        assertNull(PendingPhoto.bytesFor("item-b"))
+    }
+
+    @Test
+    fun logoutAndInvalidSessionDropThePendingPhotoAndThumbs() = runTest(dispatcher) {
+        val api = ScriptApi()
+        val cache = MemoryCache()
+        val repo = repo(api, cache)
+        repo.session.token = "token-a"
+        cache.replace(listOf(item("a", "A家药", 3)))
+        repo.restoreFromCache()
+        PendingPhoto.jpeg = byteArrayOf(7, 7)
+        repo.rememberThumb("p", byteArrayOf(8))
+        repo.logout()
+        assertNull(PendingPhoto.jpeg)
+        assertTrue(repo.thumbs.value.isEmpty())
+
+        PendingPhoto.jpeg = byteArrayOf(7, 7)
+        repo.rememberThumb("p", byteArrayOf(8))
+        repo.session.token = "token-a"
+        api.syncHandler = { throw PantryCallException(401, "unauthorized", "登录已失效") }
+        assertFailsWith<PantryCallException> { repo.pull() }
+        assertNull(PendingPhoto.jpeg)
+        assertTrue(repo.thumbs.value.isEmpty())
+
+        PendingPhoto.jpeg = byteArrayOf(4, 4)
+        repo.session.token = "token-a"
+        api.syncHandler = { throw PantryCallException(403, "not_in_family", "不在家庭中") }
+        assertFailsWith<PantryCallException> { repo.pull() }
+        assertNull(PendingPhoto.jpeg)
+
+        PendingPhoto.jpeg = byteArrayOf(5, 5)
+        repo.handleSocket("""{"t":"session_revoked"}""")
+        assertNull(PendingPhoto.jpeg)
+    }
+
+    @Test
     fun displayNameUpdateReplacesTheDefault() = runTest(dispatcher) {
         val api = ScriptApi()
         val repo = repo(api, MemoryCache())

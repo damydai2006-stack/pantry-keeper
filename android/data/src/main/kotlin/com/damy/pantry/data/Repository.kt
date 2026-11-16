@@ -144,6 +144,8 @@ class PantryRepository(
         publish(emptyList())
         cache.setCursor(0)
         family.value = null
+        thumbs.value = emptyMap()
+        PendingPhoto.clear()
     }
 
     suspend fun createFamily(name: String): Family = online {
@@ -316,6 +318,8 @@ class PantryRepository(
         session.saveFamily(null)
         items.value = emptyList()
         family.value = null
+        thumbs.value = emptyMap()
+        PendingPhoto.clear()
     }
 
     private fun validate(draft: ItemDraft) {

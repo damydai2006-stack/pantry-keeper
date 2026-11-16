@@ -199,7 +199,11 @@ fun CameraExplain(onCancel: () -> Unit, onAllow: () -> Unit) {
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text("需要使用相机") },
-        text = { Text(keepPhrases("需要使用相机来扫描条形码和拍摄包装上的日期，照片只用于识别和保存到你的家庭清单。")) },
+        text = {
+            Text(keepPhrases("需要使用相机来扫描"))
+            Text(keepPhrases("条形码和拍摄包装上的日期，"))
+            Text(keepPhrases("照片只用于识别和保存到你的家庭清单。"))
+        },
         confirmButton = { TextButton(onClick = onAllow, modifier = Modifier.testTag("camera_allow")) { Text("允许") } },
         dismissButton = { TextButton(onClick = onCancel) { Text("取消") } },
     )
@@ -231,23 +235,25 @@ fun ConfirmScreen(
     var name by remember { mutableStateOf("") }
     var production by remember { mutableStateOf(view.production?.toString().orEmpty()) }
     var shelfValue by remember { mutableStateOf(view.shelf?.value?.toString().orEmpty()) }
-    var shelfUnit by remember { mutableStateOf(view.shelf?.unit ?: ShelfUnit.MONTH) }
+    var shelfUnit by remember { mutableStateOf(view.shelf?.unit) }
     var expiry by remember { mutableStateOf(view.expiry.toString()) }
     var chosen by remember { mutableStateOf(view.expiry) }
     val alternate = view.alternate
-    fun recompute(fromProduction: String, valueText: String, unit: ShelfUnit) {
+    fun recompute(fromProduction: String, valueText: String, unit: ShelfUnit?) {
+        val chosenUnit = unit ?: return
         val start = runCatching { kotlinx.datetime.LocalDate.parse(fromProduction) }.getOrNull() ?: return
         val value = valueText.toIntOrNull() ?: return
-        if (!DateMath.shelfAllowed(value, unit)) return
-        val next = DateMath.addShelf(start, value, unit)
+        if (!DateMath.shelfAllowed(value, chosenUnit)) return
+        val next = DateMath.addShelf(start, value, chosenUnit)
         expiry = next.toString()
         chosen = next
     }
-    Column(Modifier.fillMaxSize().background(bg).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().background(bg)) {
+    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("确认识别结果", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text(keepPhrases("请核对下面的信息，确认后才会入库。"), fontSize = 16.sp)
         if (photo != null) {
-            Image(photo, contentDescription = "包装照片", modifier = Modifier.fillMaxWidth().height(160.dp).testTag("confirm_photo"), contentScale = ContentScale.Crop)
+            Image(photo, contentDescription = "包装照片", modifier = Modifier.fillMaxWidth().height(if (alternate != null) 96.dp else 140.dp).testTag("confirm_photo"), contentScale = ContentScale.Crop)
         }
         OutlinedTextField(name, { name = it.take(40) }, modifier = Modifier.fillMaxWidth().testTag("confirm_name"), label = { Text("名称") }, singleLine = true)
         OutlinedTextField(
@@ -304,6 +310,8 @@ fun ConfirmScreen(
             singleLine = true,
         )
         Text(basisLine(view.basis), fontSize = 16.sp)
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(
             onClick = {
                 onNext(
@@ -311,8 +319,8 @@ fun ConfirmScreen(
                         name = name,
                         expiry = expiry,
                         production = production.ifBlank { null },
-                        shelfValue = shelfValue.toIntOrNull(),
-                        shelfUnit = shelfUnit.name.lowercase(),
+                        shelfValue = if (shelfUnit == null) null else shelfValue.toIntOrNull(),
+                        shelfUnit = shelfUnit?.name?.lowercase(),
                         note = view.notes.joinToString(" "),
                     ),
                 )
@@ -323,7 +331,8 @@ fun ConfirmScreen(
         OutlinedButton(onClick = {
             onManual(CapturePrefill(name = name, expiry = expiry, production = production.ifBlank { null }, manualMode = "shelf"))
         }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("识别不准，改用手选") }
-        TextButton(onClick = onBack) { Text("返回") }
+        TextButton(onClick = { com.damy.pantry.data.PendingPhoto.clear(); onBack() }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("返回") }
+    }
     }
 }
 
@@ -400,6 +409,7 @@ private fun PhotoCamera(onBack: () -> Unit, onText: (String, ByteArray?) -> Unit
     var capture by remember { mutableStateOf<ImageCapture?>(null) }
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
     var status by remember { mutableStateOf("对准日期区域") }
+    val recognizer = remember { TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build()) }
     Column(Modifier.fillMaxSize().background(bg)) {
         Row(Modifier.fillMaxWidth().padding(8.dp)) { TextButton(onClick = onBack) { Text("返回") }; Text("拍包装照片", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
         Text(status, modifier = Modifier.padding(horizontal = 20.dp), fontSize = 16.sp)
@@ -413,7 +423,7 @@ private fun PhotoCamera(onBack: () -> Unit, onText: (String, ByteArray?) -> Unit
                     override fun onCaptureSuccess(image: ImageProxy) {
                         val jpeg = jpegBytes(image)
                         scope.launch {
-                            val text = withTimeoutOrNull(5_000) { recognize(image) }.orEmpty()
+                            val text = withTimeoutOrNull(5_000) { recognize(image, recognizer) }.orEmpty()
                             image.close()
                             onText(text, jpeg)
                         }
@@ -442,19 +452,19 @@ private fun PhotoCamera(onBack: () -> Unit, onText: (String, ByteArray?) -> Unit
         }, ContextCompat.getMainExecutor(context))
         onDispose {
             capture = null
+            recognizer.close()
             runCatching { if (future.isDone) future.get().unbindAll() }
         }
     }
 }
 
-private suspend fun recognize(image: ImageProxy): String = suspendCancellableCoroutine { cont ->
+private suspend fun recognize(image: ImageProxy, recognizer: com.google.mlkit.vision.text.TextRecognizer): String = suspendCancellableCoroutine { cont ->
     val media = image.image
     if (media == null) {
         cont.resume("")
         return@suspendCancellableCoroutine
     }
     val input = InputImage.fromMediaImage(media, image.imageInfo.rotationDegrees)
-    val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
     recognizer.process(input).addOnSuccessListener { cont.resume(it.text) }.addOnFailureListener { cont.resume("") }
 }
 
@@ -465,6 +475,25 @@ private fun prefillOf(view: OcrView.Confirm) = CapturePrefill(
     shelfUnit = view.shelf?.unit?.name?.lowercase(),
     note = view.notes.joinToString(" "),
 )
+
+fun compressForUpload(bytes: ByteArray, maxBytes: Int = 8 * 1024 * 1024): ByteArray {
+    val decoded = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return bytes
+    val maxEdge = 1600
+    val scale = minOf(1f, maxEdge.toFloat() / maxOf(decoded.width, decoded.height))
+    val width = maxOf(1, (decoded.width * scale).toInt())
+    val height = maxOf(1, (decoded.height * scale).toInt())
+    val scaled = if (width == decoded.width && height == decoded.height) decoded else android.graphics.Bitmap.createScaledBitmap(decoded, width, height, true)
+    var quality = 80
+    var out = ByteArray(0)
+    while (quality >= 40) {
+        val stream = java.io.ByteArrayOutputStream()
+        scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, quality, stream)
+        out = stream.toByteArray()
+        if (out.size <= maxBytes) return out
+        quality -= 10
+    }
+    return out
+}
 
 private fun jpegBytes(image: ImageProxy): ByteArray? {
     val buffer = image.planes.firstOrNull()?.buffer ?: return null

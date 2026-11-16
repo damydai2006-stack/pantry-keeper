@@ -169,13 +169,25 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
         composable("form") {
             val vm: ItemFormViewModel = viewModel(factory = repo.factory { ItemFormViewModel(repo) { shanghaiToday() } })
             val scope = rememberCoroutineScope()
-            ItemFormScreen(vm, repo, null, onBack = { nav.popBackStack() }, onSaved = {
-                val jpeg = com.damy.pantry.capture.PendingCapture.jpeg
+            ItemFormScreen(vm, repo, null, onBack = {
+                com.damy.pantry.data.PendingPhoto.clear()
+                nav.popBackStack()
+            }, onSaved = {
                 val created = vm.lastCreatedId
+                val jpeg = com.damy.pantry.data.PendingPhoto.bytesFor(created)
                 if (jpeg != null && created != null) {
                     scope.launch {
-                        runCatching { repo.uploadPhoto(created, jpeg) }
-                        com.damy.pantry.capture.PendingCapture.jpeg = null
+                        val prepared = runCatching { com.damy.pantry.capture.compressForUpload(jpeg) }.getOrElse {
+                            com.damy.pantry.data.PendingPhoto.retryForItem = created
+                            repo.notice.value = "照片未上传，可在编辑页重试"
+                            return@launch
+                        }
+                        runCatching { repo.uploadPhoto(created, prepared) }
+                            .onSuccess { com.damy.pantry.data.PendingPhoto.clear() }
+                            .onFailure {
+                                com.damy.pantry.data.PendingPhoto.retryForItem = created
+                                repo.notice.value = "照片未上传，可在编辑页重试"
+                            }
                     }
                 }
                 nav.popBackStack()

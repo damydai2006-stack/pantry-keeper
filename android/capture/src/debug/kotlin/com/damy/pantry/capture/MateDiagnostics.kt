@@ -45,7 +45,11 @@ private suspend fun probe(): String = suspendCancellableCoroutine { cont ->
     val bitmap = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888)
     val image = InputImage.fromBitmap(bitmap, 0)
     val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
-    recognizer.process(image).addOnSuccessListener { cont.resume("ML Kit 中文识别可用") }.addOnFailureListener {
+    recognizer.process(image).addOnSuccessListener {
+        recognizer.close()
+        cont.resume("ML Kit 中文识别可用")
+    }.addOnFailureListener {
+        recognizer.close()
         cont.resume("ML Kit 中文识别失败：${it.javaClass.simpleName}")
     }
 }

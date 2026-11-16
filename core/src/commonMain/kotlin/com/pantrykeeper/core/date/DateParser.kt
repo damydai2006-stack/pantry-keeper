@@ -291,9 +291,9 @@ object DateParser {
     private fun findDates(line: String): List<RawDate> {
         val consumed = BooleanArray(line.length)
         val hits = mutableListOf<RawDate>()
-        fun take(range: IntRange, build: () -> RawDate?) {
+        fun take(range: IntRange, rejectUnit: Boolean = false, build: () -> RawDate?) {
             if (range.isEmpty() || range.any { it !in consumed.indices || consumed[it] }) return
-            if (followedByUnit(line, range.last + 1)) return
+            if (rejectUnit && followedByUnit(line, range.last + 1)) return
             val hit = build() ?: return
             range.forEach { consumed[it] = true }
             hits += hit
@@ -312,9 +312,11 @@ object DateParser {
             take(m.range) { fullDate(m.range, m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3].toInt(), ambiguous = false) }
         }
         for (m in ymd.findAll(line)) {
-            val truncated = m.groupValues[2].length < 2 || m.groupValues[3].length < 2
+            val monthRaw = m.groupValues[2]
+            val dayRaw = m.groupValues[3]
+            val truncated = dayRaw.length == 1 && monthRaw.length == 2
             take(m.range) {
-                fullDate(m.range, m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3].toInt(), ambiguous = truncated)
+                fullDate(m.range, m.groupValues[1].toInt(), monthRaw.toInt(), dayRaw.toInt(), ambiguous = truncated)
             }
         }
         for (m in mdy.findAll(line)) {
@@ -344,7 +346,7 @@ object DateParser {
             val month = m.groupValues[1].toInt()
             val day = m.groupValues[2].toInt()
             if (month !in 1..12 || day !in 1..31) continue
-            take(m.range) {
+            take(m.range, rejectUnit = true) {
                 RawDate(DateKind.MONTH_DAY, m.range.first, m.range.last + 1, null, month, day, ambiguous = true)
             }
         }
@@ -360,7 +362,7 @@ object DateParser {
     private fun followedByUnit(line: String, end: Int): Boolean {
         if (end > line.length) return false
         val rest = line.substring(end)
-        return Regex("(?i)^[ \\t]*(?:mg|kg|ml|μg|ug|g|l|片|粒|袋|瓶|盒|支|包|克|毫克|千克|公斤|毫升|升|丸|枚)(?![A-Za-z])").containsMatchIn(rest)
+        return Regex("(?i)^[ \\t]*(?:mg|kg|ml|μg|ug|g|l|片|粒|袋|瓶|盒|支|克|毫克|千克|公斤|毫升|升|丸|枚)(?![A-Za-z0-9])").containsMatchIn(rest)
     }
 
     private fun monthOnly(range: IntRange, year: Int, month: Int): RawDate? {

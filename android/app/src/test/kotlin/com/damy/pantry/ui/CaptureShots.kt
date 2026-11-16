@@ -31,6 +31,17 @@ class CaptureShots {
     val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
+    fun compressStaysWithinTheLimit() {
+        val bitmap = android.graphics.Bitmap.createBitmap(1800, 1200, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.BLUE)
+        val raw = java.io.ByteArrayOutputStream()
+        bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 100, raw)
+        val out = com.damy.pantry.capture.compressForUpload(raw.toByteArray(), maxBytes = 80_000)
+        org.junit.Assert.assertTrue(out.size <= 80_000)
+        org.junit.Assert.assertEquals(0xFF.toByte(), out[0])
+    }
+
+    @Test
     fun confirm() {
         show {
             ConfirmScreen(
