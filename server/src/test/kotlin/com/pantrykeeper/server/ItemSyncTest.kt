@@ -551,6 +551,80 @@ class ItemSyncTest {
         assertEquals(HttpStatusCode.NotFound, gone.status)
         assertEquals(afterDelete, photoFileCount())
     }
+
+    @Test
+    fun malformedAuthBodyIs400AndTheLogOmitsThePhone() = app { client ->
+        val number = phone(39)
+        val root = org.slf4j.LoggerFactory.getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME) as ch.qos.logback.classic.Logger
+        val appender = ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>()
+        appender.start()
+        root.addAppender(appender)
+        try {
+            val login = client.post("/api/v1/auth/login") {
+                setBody(TextContent("""{"phone":"$number","code":123456,"clientKind":"app"}""", ContentType.Application.Json))
+            }
+            assertEquals(HttpStatusCode.BadRequest, login.status)
+            assertFalse(login.bodyAsText().contains(number))
+            val code = client.post("/api/v1/auth/code") {
+                setBody(TextContent("""{"phone":"$number"""", ContentType.Application.Json))
+            }
+            assertEquals(HttpStatusCode.BadRequest, code.status)
+            val dumped = appender.list.joinToString("\n") { event ->
+                buildString {
+                    append(event.formattedMessage)
+                    event.throwableProxy?.let { proxy ->
+                        append(proxy.className)
+                        append(proxy.message)
+                        proxy.stackTraceElementProxyArray?.forEach { append(it.toString()) }
+                    }
+                }
+            }
+            assertFalse(dumped.contains(number))
+            assertTrue(appender.list.any { it.formattedMessage.contains("BadRequestException") || it.formattedMessage.contains("request failed") })
+        } finally {
+            root.detachAppender(appender)
+        }
+    }
+
+    @Test
+    fun emptyFamilyPurgeDeletesPhotoFiles() = app { client ->
+        val owner = login(client, phone(40))
+        createFamily(client, owner, "将清空的家")
+        val item = client.post("/api/v1/items") {
+            bearer(owner)
+            contentType(ContentType.Application.Json)
+            setBody(CreateItemRequest(name = "照片袋", expiryDate = "2027-06-01"))
+        }.body<ItemDto>()
+        val root = java.nio.file.Path.of(Box.config.dataDir)
+        fun files(): Set<java.nio.file.Path> {
+            if (!java.nio.file.Files.exists(root)) return emptySet()
+            return java.nio.file.Files.walk(root).use { stream ->
+                stream.filter { java.nio.file.Files.isRegularFile(it) }.toList().toSet()
+            }
+        }
+        val before = files()
+        val uploaded = client.post("/api/v1/items/${item.id}/photo") {
+            bearer(owner)
+            setBody(MultiPartFormDataContent(formData {
+                append("file", tinyJpeg(), Headers.build {
+                    append(HttpHeaders.ContentType, ContentType.Image.JPEG.toString())
+                    append(HttpHeaders.ContentDisposition, "filename=\"bag.jpg\"")
+                })
+            }))
+        }
+        assertEquals(HttpStatusCode.OK, uploaded.status, uploaded.bodyAsText())
+        val created = files() - before
+        assertTrue(created.size >= 2)
+        val left = client.post("/api/v1/families/leave") { bearer(owner) }
+        assertEquals(HttpStatusCode.OK, left.status, left.bodyAsText())
+        Box.clock.setOffsetSeconds(Box.clock.offsetSeconds() + 30L * 86400 + 5)
+        val purged = client.post("/api/v1/test/purge-now") {
+            header("X-Pantry-Test-Token", Box.config.testToken)
+        }
+        assertEquals(HttpStatusCode.OK, purged.status, purged.bodyAsText())
+        assertTrue(purged.body<PurgeResponse>().purgedFamilies >= 1)
+        created.forEach { assertFalse(java.nio.file.Files.exists(it)) }
+    }
 }
 
 private fun HttpRequestBuilder.bearer(token: String) {

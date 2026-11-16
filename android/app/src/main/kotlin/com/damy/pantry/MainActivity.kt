@@ -150,42 +150,51 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
                 listVm = listVm,
                 historyVm = historyVm,
                 today = shanghaiToday(),
-                onAddManual = { nav.navigate("form") },
+                onAddManual = {
+                    val captureId = com.damy.pantry.data.PendingPhoto.beginCapture()
+                    nav.navigate("form/$captureId")
+                },
                 onEdit = { nav.navigate("edit/$it") },
                 onStub = { nav.navigate("stub/$it") },
-                onCapture = { nav.navigate("capture/$it") },
+                onCapture = { mode ->
+                    val captureId = com.damy.pantry.data.PendingPhoto.beginCapture()
+                    nav.navigate("capture/$mode/$captureId")
+                },
                 onMembers = { nav.navigate("members") },
                 onNickname = { nav.navigate("nickname/stay") },
                 onLogout = { nav.navigate("login") { popUpTo(nav.graph.id) { inclusive = true } } },
                 onRemoved = { nav.navigate("family") { popUpTo("home") { inclusive = true } } },
             )
         }
-        composable("shelf") {
+        composable("shelf/{captureId}") { entry ->
+            val captureId = entry.arguments?.getString("captureId").orEmpty()
             com.damy.pantry.capture.ShelfPickScreen(shanghaiToday(), onBack = { nav.popBackStack() }, onDone = { prefill ->
-                com.damy.pantry.capture.PendingCapture.prefill = prefill
-                nav.navigate("form") { popUpTo("home") }
-            })
+                com.damy.pantry.capture.PendingCapture.prefill = prefill.copy(captureId = captureId)
+                nav.navigate("form/$captureId") { popUpTo("home") }
+            }, captureId = captureId)
         }
-        composable("form") {
-            val vm: ItemFormViewModel = viewModel(factory = repo.factory { ItemFormViewModel(repo) { shanghaiToday() } })
+        composable("form/{captureId}") { entry ->
+            val captureId = entry.arguments?.getString("captureId").orEmpty()
+            val vm: ItemFormViewModel = viewModel(key = captureId, factory = repo.factory { ItemFormViewModel(repo) { shanghaiToday() } })
             val scope = rememberCoroutineScope()
             ItemFormScreen(vm, repo, null, onBack = {
-                com.damy.pantry.data.PendingPhoto.clear()
+                com.damy.pantry.data.PendingPhoto.abandon(captureId)
                 nav.popBackStack()
-            }, onSaved = {
+            }, onSaved = { message ->
                 val created = vm.lastCreatedId
-                val jpeg = com.damy.pantry.data.PendingPhoto.bytesFor(created)
+                val jpeg = if (message == null) com.damy.pantry.data.PendingPhoto.takeCapture(captureId) else null
+                if (message != null) com.damy.pantry.data.PendingPhoto.abandon(captureId)
                 if (jpeg != null && created != null) {
                     scope.launch {
                         val prepared = runCatching { com.damy.pantry.capture.compressForUpload(jpeg) }.getOrElse {
-                            com.damy.pantry.data.PendingPhoto.retryForItem = created
+                            com.damy.pantry.data.PendingPhoto.holdForItem(created, jpeg)
                             repo.notice.value = "照片未上传，可在编辑页重试"
                             return@launch
                         }
                         runCatching { repo.uploadPhoto(created, prepared) }
-                            .onSuccess { com.damy.pantry.data.PendingPhoto.clear() }
+                            .onSuccess { com.damy.pantry.data.PendingPhoto.remove(created) }
                             .onFailure {
-                                com.damy.pantry.data.PendingPhoto.retryForItem = created
+                                com.damy.pantry.data.PendingPhoto.holdForItem(created, jpeg)
                                 repo.notice.value = "照片未上传，可在编辑页重试"
                             }
                     }
@@ -203,18 +212,22 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
                 nav.navigate("family") { popUpTo("home") { inclusive = true } }
             })
         }
-        composable("capture/{mode}") { entry ->
+        composable("capture/{mode}/{captureId}") { entry ->
+            val captureId = entry.arguments?.getString("captureId").orEmpty()
             val mode = if (entry.arguments?.getString("mode") == "scan") com.damy.pantry.capture.CaptureMode.SCAN else com.damy.pantry.capture.CaptureMode.PHOTO
             com.damy.pantry.capture.CaptureEntry(
                 mode = mode,
+                captureId = captureId,
                 lookup = { repo.barcode(it) },
                 onDone = { prefill ->
-                    com.damy.pantry.capture.PendingCapture.prefill = prefill
-                    nav.navigate("form") { popUpTo("home") }
+                    val id = prefill.captureId ?: captureId
+                    com.damy.pantry.capture.PendingCapture.prefill = prefill.copy(captureId = id)
+                    nav.navigate("form/$id") { popUpTo("home") }
                 },
                 onManual = { prefill ->
-                    com.damy.pantry.capture.PendingCapture.prefill = prefill
-                    val route = if (prefill.manualMode == "shelf") "shelf" else "form"
+                    val id = prefill.captureId ?: captureId
+                    com.damy.pantry.capture.PendingCapture.prefill = prefill.copy(captureId = id)
+                    val route = if (prefill.manualMode == "shelf") "shelf/$id" else "form/$id"
                     nav.navigate(route) { popUpTo("home") }
                 },
                 onBack = { nav.popBackStack() },

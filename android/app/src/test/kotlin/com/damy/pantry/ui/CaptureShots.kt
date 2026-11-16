@@ -42,6 +42,25 @@ class CaptureShots {
     }
 
     @Test
+    fun compressAppliesExifOrientation() {
+        val bitmap = android.graphics.Bitmap.createBitmap(30, 10, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.RED)
+        val raw = java.io.ByteArrayOutputStream()
+        bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, raw)
+        val file = java.io.File.createTempFile("orient", ".jpg")
+        file.writeBytes(raw.toByteArray())
+        val exif = androidx.exifinterface.media.ExifInterface(file.absolutePath)
+        exif.setAttribute(
+            androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+            androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90.toString(),
+        )
+        exif.saveAttributes()
+        val out = com.damy.pantry.capture.compressForUpload(file.readBytes())
+        val decoded = android.graphics.BitmapFactory.decodeByteArray(out, 0, out.size)
+        org.junit.Assert.assertTrue("rotated height ${decoded.height} width ${decoded.width}", decoded.height > decoded.width)
+    }
+
+    @Test
     fun confirm() {
         show {
             ConfirmScreen(

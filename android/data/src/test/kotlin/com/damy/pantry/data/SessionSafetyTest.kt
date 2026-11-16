@@ -191,13 +191,29 @@ class SessionSafetyTest {
 
     @Test
     fun pendingPhotoDoesNotAttachToTheNextItem() {
-        PendingPhoto.jpeg = byteArrayOf(1, 2, 3)
         PendingPhoto.clear()
+        PendingPhoto.storeCapture("cap-a", byteArrayOf(1, 2, 3))
+        PendingPhoto.abandon("cap-a")
         assertNull(PendingPhoto.bytesFor("item-b"))
-        PendingPhoto.jpeg = byteArrayOf(9, 9)
-        assertTrue(PendingPhoto.bytesFor("item-a")!!.contentEquals(byteArrayOf(9, 9)))
+        assertNull(PendingPhoto.bytesFor("cap-a"))
+        val capB = PendingPhoto.beginCapture()
+        assertNull(PendingPhoto.bytesFor(capB))
+        assertNull(PendingPhoto.bytesFor("item-b"))
+    }
+
+    @Test
+    fun failedUploadStaysWithItsItemWhenAnotherCaptureStarts() {
         PendingPhoto.clear()
+        PendingPhoto.storeCapture("cap-a", byteArrayOf(4, 4))
+        val taken = PendingPhoto.takeCapture("cap-a")
+        assertTrue(taken!!.contentEquals(byteArrayOf(4, 4)))
+        PendingPhoto.holdForItem("item-a", taken)
+        val capB = PendingPhoto.beginCapture()
+        assertNull(PendingPhoto.bytesFor(capB))
         assertNull(PendingPhoto.bytesFor("item-b"))
+        assertNull(PendingPhoto.takeCapture(capB))
+        assertTrue(PendingPhoto.bytesFor("item-a")!!.contentEquals(byteArrayOf(4, 4)))
+        PendingPhoto.clear()
     }
 
     @Test
@@ -208,29 +224,30 @@ class SessionSafetyTest {
         repo.session.token = "token-a"
         cache.replace(listOf(item("a", "A家药", 3)))
         repo.restoreFromCache()
-        PendingPhoto.jpeg = byteArrayOf(7, 7)
+        PendingPhoto.clear()
+        PendingPhoto.storeCapture("cap", byteArrayOf(7, 7))
         repo.rememberThumb("p", byteArrayOf(8))
         repo.logout()
-        assertNull(PendingPhoto.jpeg)
+        assertNull(PendingPhoto.bytesFor("cap"))
         assertTrue(repo.thumbs.value.isEmpty())
 
-        PendingPhoto.jpeg = byteArrayOf(7, 7)
+        PendingPhoto.storeCapture("cap", byteArrayOf(7, 7))
         repo.rememberThumb("p", byteArrayOf(8))
         repo.session.token = "token-a"
         api.syncHandler = { throw PantryCallException(401, "unauthorized", "登录已失效") }
         assertFailsWith<PantryCallException> { repo.pull() }
-        assertNull(PendingPhoto.jpeg)
+        assertNull(PendingPhoto.bytesFor("cap"))
         assertTrue(repo.thumbs.value.isEmpty())
 
-        PendingPhoto.jpeg = byteArrayOf(4, 4)
+        PendingPhoto.holdForItem("item-a", byteArrayOf(4, 4))
         repo.session.token = "token-a"
         api.syncHandler = { throw PantryCallException(403, "not_in_family", "不在家庭中") }
         assertFailsWith<PantryCallException> { repo.pull() }
-        assertNull(PendingPhoto.jpeg)
+        assertNull(PendingPhoto.bytesFor("item-a"))
 
-        PendingPhoto.jpeg = byteArrayOf(5, 5)
+        PendingPhoto.storeCapture("cap", byteArrayOf(5, 5))
         repo.handleSocket("""{"t":"session_revoked"}""")
-        assertNull(PendingPhoto.jpeg)
+        assertNull(PendingPhoto.bytesFor("cap"))
     }
 
     @Test

@@ -80,7 +80,7 @@ fun Application.module(
     val sessions = SessionService(clock)
     val auth = AuthService(config, clock, crypto, sessions)
     val families = FamilyService(clock)
-    val purge = PurgeService(clock)
+    val purge = PurgeService(clock, java.nio.file.Path.of(config.dataDir))
     val hub = FamilyHub(CoroutineScope(SupervisorJob() + Dispatchers.IO), sessions::sessionOpen)
     val photos = PhotoService(config, clock, hub, freeBytes ?: { Files.getFileStore(it).usableSpace })
     val items = ItemService(clock, hub, photos)
@@ -98,8 +98,12 @@ fun Application.module(
         exception<ApiException> { call, cause ->
             call.respond(cause.status, ErrorBody(cause.code, cause.message ?: ""))
         }
+        exception<io.ktor.server.plugins.BadRequestException> { call, cause ->
+            log.error("request failed: ${cause.javaClass.name}")
+            call.respond(HttpStatusCode.BadRequest, ErrorBody("bad_request", "请求格式不正确"))
+        }
         exception<Throwable> { call, cause ->
-            log.error("request failed", cause)
+            log.error("request failed: ${cause.javaClass.name}")
             call.respond(HttpStatusCode.InternalServerError, ErrorBody("internal", "服务器错误"))
         }
     }

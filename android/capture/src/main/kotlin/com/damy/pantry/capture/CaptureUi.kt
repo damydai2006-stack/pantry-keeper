@@ -1,6 +1,7 @@
 package com.damy.pantry.capture
 
 import android.Manifest
+import androidx.activity.compose.BackHandler
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -87,6 +88,7 @@ data class CapturePrefill(
     val shelfUnit: String? = null,
     val note: String? = null,
     val manualMode: String? = null,
+    val captureId: String? = null,
 )
 
 private val brand = Color(0xFF1E4A62)
@@ -97,6 +99,7 @@ private val yellowText = Color(0xFF6B4E00)
 @Composable
 fun CaptureEntry(
     mode: CaptureMode,
+    captureId: String,
     lookup: suspend (String) -> BarcodeHit,
     onDone: (CapturePrefill) -> Unit,
     onManual: (CapturePrefill) -> Unit,
@@ -121,13 +124,19 @@ fun CaptureEntry(
         owner.lifecycle.addObserver(observer)
         onDispose { owner.lifecycle.removeObserver(observer) }
     }
+    fun leave() {
+        com.damy.pantry.data.PendingPhoto.abandon(captureId)
+        onBack()
+    }
+    fun forward(draft: CapturePrefill) = onManual(draft.copy(captureId = captureId))
+    fun finish(draft: CapturePrefill) = onDone(draft.copy(captureId = captureId))
     LaunchedEffect(Unit) {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         stage = if (granted) "camera" else "explain"
     }
     when (stage) {
         "explain" -> CameraExplain(
-            onCancel = onBack,
+            onCancel = { leave() },
             onAllow = { launcher.launch(Manifest.permission.CAMERA) },
         )
         "denied" -> CameraDenied(
@@ -136,23 +145,24 @@ fun CaptureEntry(
                     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
                 )
             },
-            onManual = { onManual(CapturePrefill()) },
+            onManual = { forward(CapturePrefill()) },
+            onBack = { leave() },
         )
         "camera" -> if (mode == CaptureMode.SCAN) {
             BarcodeCamera(
-                onBack = onBack,
+                onBack = { leave() },
                 onCode = { code ->
                     if (code.length == 20 && code.all { it.isDigit() }) {
                         message = "药品追溯码暂不能查名，请手填"
-                        onManual(CapturePrefill(note = message))
+                        forward(CapturePrefill(note = message))
                     } else {
                         stage = "lookup:$code"
                     }
                 },
             )
         } else {
-            PhotoCamera(onBack = onBack) { text, jpeg ->
-                PendingCapture.jpeg = jpeg
+            PhotoCamera(onBack = { leave() }) { text, jpeg ->
+                if (jpeg != null) com.damy.pantry.data.PendingPhoto.storeCapture(captureId, jpeg)
                 raw = text
                 val interpreted = OcrPipeline.interpret(text, com.damy.pantry.data.shanghaiToday())
                 view = interpreted
@@ -161,30 +171,48 @@ fun CaptureEntry(
         }
         "confirm" -> {
             val confirm = view as? OcrView.Confirm
-            if (confirm == null) FailScreen(raw, onRetake = { stage = "camera" }, onManual = { onManual(CapturePrefill(manualMode = "shelf")) }, onDate = { onManual(CapturePrefill(manualMode = "date")) })
-            else {
-                val photo = PendingCapture.jpeg?.let { bytes ->
+            if (confirm == null) {
+                FailScreen(
+                    raw,
+                    captureId = captureId,
+                    onRetake = { stage = "camera" },
+                    onManual = { forward(CapturePrefill(manualMode = "shelf")) },
+                    onDate = { forward(CapturePrefill(manualMode = "date")) },
+                    onBack = { leave() },
+                )
+            } else {
+                val photo = com.damy.pantry.data.PendingPhoto.bytesFor(captureId)?.let { bytes ->
                     android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
                 }
-                ConfirmScreen(confirm, photo, onBack = { stage = "camera" }, onManual = { draft -> onManual(draft.copy(manualMode = "shelf")) }, onNext = onDone)
+                ConfirmScreen(
+                    confirm,
+                    photo,
+                    captureId = captureId,
+                    onBack = { stage = "camera" },
+                    onManual = { draft -> forward(draft.copy(manualMode = "shelf")) },
+                    onNext = { finish(it) },
+                )
             }
         }
         "fail" -> FailScreen(
             raw,
+            captureId = captureId,
             onRetake = { stage = "camera" },
-            onManual = { onManual(CapturePrefill(manualMode = "shelf")) },
-            onDate = { onManual(CapturePrefill(manualMode = "date")) },
+            onManual = { forward(CapturePrefill(manualMode = "shelf")) },
+            onDate = { forward(CapturePrefill(manualMode = "date")) },
+            onBack = { leave() },
         )
         else -> if (stage.startsWith("lookup:")) {
             val code = stage.removePrefix("lookup:")
+            BackHandler { leave() }
             LaunchedEffect(code) {
                 val hit = runCatching { lookup(code) }.getOrElse { BarcodeHit(found = false, reason = "lookup_failed") }
                 val foundName = hit.name
                 if (hit.found && !foundName.isNullOrBlank()) {
-                    onDone(CapturePrefill(name = foundName, category = hit.defaultCategory))
+                    finish(CapturePrefill(name = foundName, category = hit.defaultCategory))
                 } else {
                     val note = if (hit.reason == "trace_code") "药品追溯码暂不能查名，请手填" else "未查到名称，请手填"
-                    onManual(CapturePrefill(note = note))
+                    forward(CapturePrefill(note = note))
                 }
             }
             Column(Modifier.fillMaxSize().background(bg).padding(20.dp)) {
@@ -196,6 +224,7 @@ fun CaptureEntry(
 
 @Composable
 fun CameraExplain(onCancel: () -> Unit, onAllow: () -> Unit) {
+    BackHandler(onBack = onCancel)
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text("需要使用相机") },
@@ -210,9 +239,10 @@ fun CameraExplain(onCancel: () -> Unit, onAllow: () -> Unit) {
 }
 
 @Composable
-fun CameraDenied(onSettings: () -> Unit, onManual: () -> Unit) {
+fun CameraDenied(onSettings: () -> Unit, onManual: () -> Unit, onBack: () -> Unit = onManual) {
+    BackHandler(onBack = onBack)
     AlertDialog(
-        onDismissRequest = onManual,
+        onDismissRequest = onBack,
         title = { Text("无法使用相机") },
         text = { Text(keepPhrases("没有相机权限也可以手动填写")) },
         confirmButton = {
@@ -231,6 +261,7 @@ fun ConfirmScreen(
     onBack: () -> Unit,
     onManual: (CapturePrefill) -> Unit,
     onNext: (CapturePrefill) -> Unit,
+    captureId: String = "",
 ) {
     var name by remember { mutableStateOf("") }
     var production by remember { mutableStateOf(view.production?.toString().orEmpty()) }
@@ -248,6 +279,11 @@ fun ConfirmScreen(
         expiry = next.toString()
         chosen = next
     }
+    fun leave() {
+        com.damy.pantry.data.PendingPhoto.abandon(captureId)
+        onBack()
+    }
+    BackHandler { leave() }
     Column(Modifier.fillMaxSize().background(bg)) {
     Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("确认识别结果", fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -331,13 +367,24 @@ fun ConfirmScreen(
         OutlinedButton(onClick = {
             onManual(CapturePrefill(name = name, expiry = expiry, production = production.ifBlank { null }, manualMode = "shelf"))
         }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("识别不准，改用手选") }
-        TextButton(onClick = { com.damy.pantry.data.PendingPhoto.clear(); onBack() }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("返回") }
+        TextButton(onClick = { leave() }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("返回") }
     }
     }
 }
 
 @Composable
-fun FailScreen(raw: String, onRetake: () -> Unit, onManual: () -> Unit, onDate: () -> Unit) {
+fun FailScreen(
+    raw: String,
+    onRetake: () -> Unit,
+    onManual: () -> Unit,
+    onDate: () -> Unit,
+    captureId: String = "",
+    onBack: () -> Unit = {},
+) {
+    BackHandler {
+        com.damy.pantry.data.PendingPhoto.abandon(captureId)
+        onBack()
+    }
     Column(Modifier.fillMaxSize().background(bg).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("未能识别日期", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text("没有识别出生产日期、保质期或到期日。可以换个角度重拍，也可以自己选择保质期长度或到期日。", fontSize = 16.sp)
@@ -350,6 +397,7 @@ fun FailScreen(raw: String, onRetake: () -> Unit, onManual: () -> Unit, onDate: 
 
 @Composable
 private fun BarcodeCamera(onBack: () -> Unit, onCode: (String) -> Unit) {
+    BackHandler(onBack = onBack)
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -403,13 +451,13 @@ private fun BarcodeCamera(onBack: () -> Unit, onCode: (String) -> Unit) {
 
 @Composable
 private fun PhotoCamera(onBack: () -> Unit, onText: (String, ByteArray?) -> Unit) {
+    BackHandler(onBack = onBack)
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     var capture by remember { mutableStateOf<ImageCapture?>(null) }
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
     var status by remember { mutableStateOf("对准日期区域") }
-    val recognizer = remember { TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build()) }
     Column(Modifier.fillMaxSize().background(bg)) {
         Row(Modifier.fillMaxWidth().padding(8.dp)) { TextButton(onClick = onBack) { Text("返回") }; Text("拍包装照片", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
         Text(status, modifier = Modifier.padding(horizontal = 20.dp), fontSize = 16.sp)
@@ -423,7 +471,7 @@ private fun PhotoCamera(onBack: () -> Unit, onText: (String, ByteArray?) -> Unit
                     override fun onCaptureSuccess(image: ImageProxy) {
                         val jpeg = jpegBytes(image)
                         scope.launch {
-                            val text = withTimeoutOrNull(5_000) { recognize(image, recognizer) }.orEmpty()
+                            val text = withTimeoutOrNull(5_000) { recognize(image) }.orEmpty()
                             image.close()
                             onText(text, jpeg)
                         }
@@ -452,20 +500,24 @@ private fun PhotoCamera(onBack: () -> Unit, onText: (String, ByteArray?) -> Unit
         }, ContextCompat.getMainExecutor(context))
         onDispose {
             capture = null
-            recognizer.close()
             runCatching { if (future.isDone) future.get().unbindAll() }
         }
     }
 }
 
-private suspend fun recognize(image: ImageProxy, recognizer: com.google.mlkit.vision.text.TextRecognizer): String = suspendCancellableCoroutine { cont ->
-    val media = image.image
-    if (media == null) {
-        cont.resume("")
-        return@suspendCancellableCoroutine
+private suspend fun recognize(image: ImageProxy): String {
+    val media = image.image ?: return ""
+    val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+    return try {
+        suspendCancellableCoroutine { cont ->
+            val input = InputImage.fromMediaImage(media, image.imageInfo.rotationDegrees)
+            recognizer.process(input)
+                .addOnSuccessListener { if (cont.isActive) cont.resume(it.text) }
+                .addOnFailureListener { if (cont.isActive) cont.resume("") }
+        }
+    } finally {
+        recognizer.close()
     }
-    val input = InputImage.fromMediaImage(media, image.imageInfo.rotationDegrees)
-    recognizer.process(input).addOnSuccessListener { cont.resume(it.text) }.addOnFailureListener { cont.resume("") }
 }
 
 private fun prefillOf(view: OcrView.Confirm) = CapturePrefill(
@@ -478,11 +530,12 @@ private fun prefillOf(view: OcrView.Confirm) = CapturePrefill(
 
 fun compressForUpload(bytes: ByteArray, maxBytes: Int = 8 * 1024 * 1024): ByteArray {
     val decoded = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return bytes
+    val upright = applyExifOrientation(decoded, bytes)
     val maxEdge = 1600
-    val scale = minOf(1f, maxEdge.toFloat() / maxOf(decoded.width, decoded.height))
-    val width = maxOf(1, (decoded.width * scale).toInt())
-    val height = maxOf(1, (decoded.height * scale).toInt())
-    val scaled = if (width == decoded.width && height == decoded.height) decoded else android.graphics.Bitmap.createScaledBitmap(decoded, width, height, true)
+    val scale = minOf(1f, maxEdge.toFloat() / maxOf(upright.width, upright.height))
+    val width = maxOf(1, (upright.width * scale).toInt())
+    val height = maxOf(1, (upright.height * scale).toInt())
+    val scaled = if (width == upright.width && height == upright.height) upright else android.graphics.Bitmap.createScaledBitmap(upright, width, height, true)
     var quality = 80
     var out = ByteArray(0)
     while (quality >= 40) {
@@ -493,6 +546,33 @@ fun compressForUpload(bytes: ByteArray, maxBytes: Int = 8 * 1024 * 1024): ByteAr
         quality -= 10
     }
     return out
+}
+
+private fun applyExifOrientation(bitmap: android.graphics.Bitmap, jpeg: ByteArray): android.graphics.Bitmap {
+    val orientation = runCatching {
+        androidx.exifinterface.media.ExifInterface(java.io.ByteArrayInputStream(jpeg)).getAttributeInt(
+            androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+            androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL,
+        )
+    }.getOrDefault(androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL)
+    val matrix = android.graphics.Matrix()
+    when (orientation) {
+        androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+        androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+        androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+        androidx.exifinterface.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
+        androidx.exifinterface.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
+        androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSPOSE -> {
+            matrix.postRotate(90f)
+            matrix.preScale(-1f, 1f)
+        }
+        androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSVERSE -> {
+            matrix.postRotate(270f)
+            matrix.preScale(-1f, 1f)
+        }
+        else -> return bitmap
+    }
+    return android.graphics.Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
 }
 
 private fun jpegBytes(image: ImageProxy): ByteArray? {
@@ -512,7 +592,7 @@ private fun keepPhrases(text: String): String = buildString {
 }
 
 @Composable
-fun ShelfPickScreen(today: kotlinx.datetime.LocalDate, onBack: () -> Unit, onDone: (CapturePrefill) -> Unit) {
+fun ShelfPickScreen(today: kotlinx.datetime.LocalDate, onBack: () -> Unit, onDone: (CapturePrefill) -> Unit, captureId: String = "") {
     var custom by remember { mutableStateOf("30") }
     var unit by remember { mutableStateOf(ShelfUnit.DAY) }
     var useDate by remember { mutableStateOf(false) }
@@ -525,6 +605,11 @@ fun ShelfPickScreen(today: kotlinx.datetime.LocalDate, onBack: () -> Unit, onDon
         custom.toIntOrNull()?.let { DateMath.shelfAllowed(it, unit) } == true -> preview(custom.toInt(), unit)
         else -> ""
     }
+    fun leave() {
+        com.damy.pantry.data.PendingPhoto.abandon(captureId)
+        onBack()
+    }
+    BackHandler { leave() }
     Column(Modifier.fillMaxSize().background(bg).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("手选保质期", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text(keepPhrases("从今天起算。也可以改成直接选择到期日。"), fontSize = 16.sp)
@@ -559,12 +644,13 @@ fun ShelfPickScreen(today: kotlinx.datetime.LocalDate, onBack: () -> Unit, onDon
                     shelfValue = if (useDate) null else value,
                     shelfUnit = if (useDate) null else chosenUnit.name.lowercase(),
                     manualMode = if (useDate) "date" else "shelf",
+                    captureId = captureId,
                 ),
             )
         }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("pick_next"), colors = ButtonDefaults.buttonColors(containerColor = brand)) {
             Text("下一步")
         }
-        TextButton(onClick = onBack) { Text("返回") }
+        TextButton(onClick = { leave() }, modifier = Modifier.testTag("shelf_back")) { Text("返回") }
     }
 }
 

@@ -405,19 +405,23 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
                 if (!online) OfflineBanner(notice)
-                val retryId = com.damy.pantry.data.PendingPhoto.retryForItem
-                if (retryId != null && com.damy.pantry.data.PendingPhoto.jpeg != null) {
-                    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("照片未上传，可在编辑页重试", modifier = Modifier.weight(1f), color = Danger, fontSize = 16.sp)
-                        TextButton(onClick = {
-                            val bytes = com.damy.pantry.data.PendingPhoto.jpeg ?: return@TextButton
-                            scope.launch {
-                                val prepared = runCatching { com.damy.pantry.capture.compressForUpload(bytes) }.getOrNull() ?: bytes
-                                runCatching { repo.uploadPhoto(retryId, prepared) }
-                                    .onSuccess { com.damy.pantry.data.PendingPhoto.clear(); vm.toast.value = "照片已上传" }
-                                    .onFailure { repo.notice.value = "照片未上传，可在编辑页重试" }
-                            }
-                        }, modifier = Modifier.heightIn(min = 48.dp).testTag("retry_photo")) { Text("重试") }
+                com.damy.pantry.data.PendingPhoto.itemIds().forEach { retryId ->
+                    val bytes = com.damy.pantry.data.PendingPhoto.bytesFor(retryId)
+                    if (bytes != null) {
+                        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("照片未上传，可在编辑页重试", modifier = Modifier.weight(1f), color = Danger, fontSize = 16.sp)
+                            TextButton(onClick = {
+                                scope.launch {
+                                    val prepared = runCatching { com.damy.pantry.capture.compressForUpload(bytes) }.getOrElse {
+                                        repo.notice.value = "照片未上传，可在编辑页重试"
+                                        return@launch
+                                    }
+                                    runCatching { repo.uploadPhoto(retryId, prepared) }
+                                        .onSuccess { com.damy.pantry.data.PendingPhoto.remove(retryId); vm.toast.value = "照片已上传" }
+                                        .onFailure { repo.notice.value = "照片未上传，可在编辑页重试" }
+                                }
+                            }, modifier = Modifier.heightIn(min = 48.dp).testTag("retry_photo")) { Text("重试") }
+                        }
                     }
                 }
                 NotificationOffBanner()
@@ -508,16 +512,16 @@ fun ItemFormScreen(vm: ItemFormViewModel, repo: PantryRepository, id: String?, o
         if (id != null && vm.editing == null) vm.load(items.firstOrNull { it.id == id })
     }
     Column(Modifier.fillMaxSize()) {
-        if (id != null && id == com.damy.pantry.data.PendingPhoto.retryForItem && com.damy.pantry.data.PendingPhoto.jpeg != null) {
+        val retryBytes = if (id == null) null else com.damy.pantry.data.PendingPhoto.bytesFor(id)
+        if (id != null && retryBytes != null) {
             Button(onClick = {
-                val bytes = com.damy.pantry.data.PendingPhoto.jpeg ?: return@Button
                 scope.launch {
-                    val prepared = runCatching { com.damy.pantry.capture.compressForUpload(bytes) }.getOrElse {
+                    val prepared = runCatching { com.damy.pantry.capture.compressForUpload(retryBytes) }.getOrElse {
                         toast(context, "照片未上传，可在编辑页重试")
                         return@launch
                     }
                     runCatching { repo.uploadPhoto(id, prepared) }
-                        .onSuccess { com.damy.pantry.data.PendingPhoto.clear(); toast(context, "照片已上传") }
+                        .onSuccess { com.damy.pantry.data.PendingPhoto.remove(id); toast(context, "照片已上传") }
                         .onFailure { toast(context, "照片未上传，可在编辑页重试") }
                 }
             }, modifier = Modifier.padding(horizontal = 20.dp).heightIn(min = 48.dp).testTag("retry_photo_edit")) { Text("重新上传照片") }
