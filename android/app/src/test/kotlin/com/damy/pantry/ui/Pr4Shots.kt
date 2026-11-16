@@ -188,7 +188,7 @@ class Pr4Shots {
     private data class Home(val repo: PantryRepository, val list: ListViewModel, val history: HistoryViewModel)
 }
 
-private object QuietApi : PantryApi {
+internal object QuietApi : PantryApi {
     override suspend fun requestCode(phone: String) = Unit
     override suspend fun login(phone: String, code: String) = error("unused")
     override suspend fun logout() = Unit

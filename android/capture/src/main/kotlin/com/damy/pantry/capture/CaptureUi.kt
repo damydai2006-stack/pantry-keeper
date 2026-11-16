@@ -229,9 +229,11 @@ fun CameraExplain(onCancel: () -> Unit, onAllow: () -> Unit) {
         onDismissRequest = onCancel,
         title = { Text("需要使用相机") },
         text = {
-            Text(keepPhrases("需要使用相机来扫描"))
-            Text(keepPhrases("条形码和拍摄包装上的日期，"))
-            Text(keepPhrases("照片只用于识别和保存到你的家庭清单。"))
+            Column {
+                Text(keepPhrases("需要使用相机来扫描"))
+                Text(keepPhrases("条形码和拍摄包装上的日期，"))
+                Text(keepPhrases("照片只用于识别和保存到你的家庭清单。"))
+            }
         },
         confirmButton = { TextButton(onClick = onAllow, modifier = Modifier.testTag("camera_allow")) { Text("允许") } },
         dismissButton = { TextButton(onClick = onCancel) { Text("取消") } },

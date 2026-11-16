@@ -40,13 +40,19 @@ fun categoryLabel(category: String): String = when (category) {
 
 data class ItemGroup(val bucket: ListBucket, val title: String, val items: List<CachedItem>)
 
+fun effectiveExpiry(item: CachedItem): LocalDate {
+    val expiry = LocalDate.parse(item.expiryDate)
+    val opened = item.openedDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+    return ReminderRules.effectiveExpiry(expiry, opened, item.afterOpenDays)
+}
+
 fun groupItems(today: LocalDate, items: List<CachedItem>, query: String): List<ItemGroup> {
     val needle = query.trim()
     val visible = items.filter { needle.isEmpty() || needle in it.name }
     return ListBucket.entries.mapNotNull { bucket ->
         val rows = visible
-            .filter { listBucket(today, LocalDate.parse(it.expiryDate)) == bucket }
-            .sortedBy { it.expiryDate }
+            .filter { listBucket(today, effectiveExpiry(it)) == bucket }
+            .sortedBy { effectiveExpiry(it).toString() }
         if (rows.isEmpty()) null else ItemGroup(bucket, bucketTitle(bucket), rows)
     }
 }

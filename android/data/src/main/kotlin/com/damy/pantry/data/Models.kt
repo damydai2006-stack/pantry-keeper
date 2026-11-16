@@ -15,6 +15,8 @@ data class CachedItem(
     val shelfLifeValue: Int? = null,
     val shelfLifeUnit: String? = null,
     val expiryBasis: String = "manual_date",
+    val openedDate: String? = null,
+    val afterOpenDays: Int? = null,
     val reminderTiers: List<String> = emptyList(),
     val status: String,
     val rev: Long,

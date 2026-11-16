@@ -31,6 +31,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.TextContent
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.routing.post as routePost
+import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
@@ -580,7 +582,71 @@ class ItemSyncTest {
                 }
             }
             assertFalse(dumped.contains(number))
-            assertTrue(appender.list.any { it.formattedMessage.contains("BadRequestException") || it.formattedMessage.contains("request failed") })
+            assertFalse(dumped.contains("123456"))
+            val requestLogs = appender.list.filter { "request failed" in it.formattedMessage }
+            assertTrue(requestLogs.isNotEmpty())
+            assertTrue(requestLogs.all { it.level.levelStr == "WARN" })
+        } finally {
+            root.detachAppender(appender)
+        }
+    }
+
+    @Test
+    fun plainTextIs415AndAServerErrorKeepsTheStackWithoutTheBody() = app(
+        extra = {
+            routing {
+                routePost("/api/v1/test/boom") {
+                    val note = call.request.headers["X-Note"].orEmpty()
+                    throw IllegalStateException(note)
+                }
+            }
+        },
+    ) { client ->
+        val number = phone(39)
+        val marker = "note-$number"
+        val root = org.slf4j.LoggerFactory.getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME) as ch.qos.logback.classic.Logger
+        val appender = ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>()
+        appender.start()
+        root.addAppender(appender)
+        try {
+            val plain = client.post("/api/v1/auth/login") {
+                setBody(TextContent(marker, ContentType.Text.Plain))
+            }
+            assertEquals(HttpStatusCode.UnsupportedMediaType, plain.status)
+            assertFalse(plain.bodyAsText().contains(number))
+            val boom = client.post("/api/v1/test/boom") {
+                header("X-Note", marker)
+            }
+            assertEquals(HttpStatusCode.InternalServerError, boom.status)
+            assertFalse(boom.bodyAsText().contains(number))
+            val requestLogs = appender.list.filter { "request failed" in it.formattedMessage }
+            val clientLogs = requestLogs.filter { it.level.levelStr == "WARN" }
+            val serverLogs = requestLogs.filter { it.level.levelStr == "ERROR" }
+            assertTrue(clientLogs.isNotEmpty())
+            assertTrue(serverLogs.isNotEmpty())
+            assertTrue(serverLogs.any { event ->
+                var proxy = event.throwableProxy
+                var frames = 0
+                while (proxy != null) {
+                    frames += proxy.stackTraceElementProxyArray?.size ?: 0
+                    proxy = proxy.cause
+                }
+                frames > 0
+            })
+            val dumped = appender.list.joinToString("\n") { event ->
+                buildString {
+                    append(event.formattedMessage)
+                    var proxy = event.throwableProxy
+                    while (proxy != null) {
+                        append(proxy.className)
+                        append(proxy.message)
+                        proxy.stackTraceElementProxyArray?.forEach { append(it.steAsString) }
+                        proxy = proxy.cause
+                    }
+                }
+            }
+            assertFalse(dumped.contains(number))
+            assertFalse(dumped.contains(marker))
         } finally {
             root.detachAppender(appender)
         }
@@ -727,6 +793,7 @@ private suspend fun nameUser(client: HttpClient, token: String, name: String) {
 private fun app(
     config: AppConfig? = null,
     freeBytes: ((java.nio.file.Path) -> Long)? = null,
+    extra: io.ktor.server.application.Application.() -> Unit = {},
     block: suspend io.ktor.server.testing.ApplicationTestBuilder.(HttpClient) -> Unit,
 ) {
     Box.ensure()
@@ -734,6 +801,7 @@ private fun app(
     testApplication {
         application {
             module(active, Box.clock, Box.fetcher, freeBytes)
+            extra()
         }
         val client = createClient {
             install(ContentNegotiation) { json(appJson) }

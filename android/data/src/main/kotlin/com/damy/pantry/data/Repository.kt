@@ -34,6 +34,7 @@ class PantryRepository(
     val notice = MutableStateFlow<String?>(null)
     val thumbs = MutableStateFlow<Map<String, ByteArray>>(emptyMap())
     val events = MutableSharedFlow<AppEvent>(extraBufferCapacity = 16)
+    var onLocalChange: (() -> Unit)? = null
 
     @Volatile private var foreground = false
     @Volatile private var networkUp = true
@@ -72,6 +73,7 @@ class PantryRepository(
                 val me = api.me()
                 session.userId = me.userId
                 session.displayName = me.displayName
+                session.notifyTime = me.notifyTime
                 if (me.familyId == null) wipeFamilyCache() else pull()
             }
         } catch (_: java.io.IOException) {
@@ -134,6 +136,7 @@ class PantryRepository(
         session.displayName = result.displayName
         session.phoneMask = maskPhone(phone)
         val me = api.me()
+        session.notifyTime = me.notifyTime
         if (me.familyId != null) pull() else wipeFamilyCache()
     }
 
@@ -146,6 +149,7 @@ class PantryRepository(
         family.value = null
         thumbs.value = emptyMap()
         PendingPhoto.clear()
+        onLocalChange?.invoke()
     }
 
     suspend fun createFamily(name: String): Family = online {
@@ -185,6 +189,7 @@ class PantryRepository(
     suspend fun leaveFamily() = online {
         api.leaveFamily()
         wipeFamilyCache()
+        onLocalChange?.invoke()
     }
 
     suspend fun saveNew(draft: ItemDraft): String = online {
@@ -222,6 +227,7 @@ class PantryRepository(
 
     suspend fun batch(ids: List<String>, action: String): BatchOutcome = online {
         val result = api.batch(ids, action)
+        if (action == "delete") PendingPhoto.drop(ids)
         pull()
         result
     }
@@ -234,25 +240,37 @@ class PantryRepository(
 
     suspend fun barcode(code: String) = api.barcode(code)
 
+    suspend fun updateNotifyTime(time: String) = online {
+        api.updateNotifyTime(time)
+        session.notifyTime = time
+        onLocalChange?.invoke()
+    }
+
     suspend fun pull() {
         if (!online.value || session.token == null) return
         guard {
-            val page = api.sync(cache.cursor())
-            if (page.reset && cache.cursor() != 0L) {
+            val since = cache.cursor()
+            val page = api.sync(since)
+            if (page.reset && since != 0L) {
                 cache.setCursor(0)
                 publish(emptyList())
-                apply(api.sync(0))
+                apply(api.sync(0), full = true)
             } else {
-                apply(page)
+                apply(page, full = since == 0L)
             }
         }
     }
 
-    private fun apply(page: SyncPage) {
-        val merged = SyncMerger.merge(cache.snapshot(), page.items, page.tombstones.map { it.itemId }.toSet())
+    private fun apply(page: SyncPage, full: Boolean) {
+        val tombstones = page.tombstones.map { it.itemId }.toSet()
+        if (full || page.reset) PendingPhoto.retain(page.items.map { it.id }.toSet())
+        else PendingPhoto.drop(tombstones)
+        val merged = SyncMerger.merge(cache.snapshot(), page.items, tombstones)
         publish(merged)
         cache.setCursor(page.rev)
         page.family?.let { remember(it) }
+        page.notifyTime?.let { session.notifyTime = it }
+        onLocalChange?.invoke()
     }
 
     private fun publish(rows: List<CachedItem>) {
@@ -320,6 +338,7 @@ class PantryRepository(
         family.value = null
         thumbs.value = emptyMap()
         PendingPhoto.clear()
+        onLocalChange?.invoke()
     }
 
     private fun validate(draft: ItemDraft) {

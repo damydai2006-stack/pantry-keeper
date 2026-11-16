@@ -28,7 +28,9 @@ import com.damy.pantry.data.ItemFormViewModel
 import com.damy.pantry.data.ListViewModel
 import com.damy.pantry.data.LoginViewModel
 import com.damy.pantry.data.PantryRepository
-import com.damy.pantry.data.shanghaiToday
+import com.damy.pantry.reminder.OPEN_REMINDERS
+import com.damy.pantry.reminder.ReminderNav
+import com.damy.pantry.reminder.rememberToday
 import com.damy.pantry.ui.FamilyCreateScreen
 import com.damy.pantry.ui.FamilyJoinScreen
 import com.damy.pantry.ui.FamilyChooseScreen
@@ -45,6 +47,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (intent.getBooleanExtra(OPEN_REMINDERS, false)) ReminderNav.open = true
         val repo = (application as PantryApp).repo
         val connectivity = getSystemService(ConnectivityManager::class.java)
         repo.setOnline(connectivityOnline(connectivity))
@@ -145,11 +148,12 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
         composable("home") {
             val listVm: ListViewModel = viewModel(factory = repo.factory { ListViewModel(repo) })
             val historyVm: HistoryViewModel = viewModel(factory = repo.factory { HistoryViewModel(repo) })
+            val today = rememberToday()
             HomeScreen(
                 repo = repo,
                 listVm = listVm,
                 historyVm = historyVm,
-                today = shanghaiToday(),
+                today = today,
                 onAddManual = {
                     val captureId = com.damy.pantry.data.PendingPhoto.beginCapture()
                     nav.navigate("form/$captureId")
@@ -168,14 +172,14 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
         }
         composable("shelf/{captureId}") { entry ->
             val captureId = entry.arguments?.getString("captureId").orEmpty()
-            com.damy.pantry.capture.ShelfPickScreen(shanghaiToday(), onBack = { nav.popBackStack() }, onDone = { prefill ->
+            com.damy.pantry.capture.ShelfPickScreen(com.damy.pantry.reminder.AppToday.today(), onBack = { nav.popBackStack() }, onDone = { prefill ->
                 com.damy.pantry.capture.PendingCapture.prefill = prefill.copy(captureId = captureId)
                 nav.navigate("form/$captureId") { popUpTo("home") }
             }, captureId = captureId)
         }
         composable("form/{captureId}") { entry ->
             val captureId = entry.arguments?.getString("captureId").orEmpty()
-            val vm: ItemFormViewModel = viewModel(key = captureId, factory = repo.factory { ItemFormViewModel(repo) { shanghaiToday() } })
+            val vm: ItemFormViewModel = viewModel(key = captureId, factory = repo.factory { ItemFormViewModel(repo) { com.damy.pantry.reminder.AppToday.today() } })
             val scope = rememberCoroutineScope()
             ItemFormScreen(vm, repo, null, onBack = {
                 com.damy.pantry.data.PendingPhoto.abandon(captureId)
@@ -204,7 +208,7 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
         }
         composable("edit/{id}") { entry ->
             val id = entry.arguments?.getString("id")
-            val vm: ItemFormViewModel = viewModel(key = id, factory = repo.factory { ItemFormViewModel(repo) { shanghaiToday() } })
+            val vm: ItemFormViewModel = viewModel(key = id, factory = repo.factory { ItemFormViewModel(repo) { com.damy.pantry.reminder.AppToday.today() } })
             ItemFormScreen(vm, repo, id, onBack = { nav.popBackStack() }, onSaved = { nav.popBackStack() })
         }
         composable("members") {
@@ -234,7 +238,13 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
             )
         }
         composable("stub/{name}") { entry ->
-            StubScreen(entry.arguments?.getString("name").orEmpty()) { nav.popBackStack() }
+            val name = entry.arguments?.getString("name").orEmpty()
+            val scope = rememberCoroutineScope()
+            when (name) {
+                "remind-time" -> com.damy.pantry.reminder.NotifyTimeScreen(repo, scope) { nav.popBackStack() }
+                "remind-access" -> com.damy.pantry.reminder.ReminderAccessScreen { nav.popBackStack() }
+                else -> StubScreen(name) { nav.popBackStack() }
+            }
         }
     }
 }

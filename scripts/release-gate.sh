@@ -36,7 +36,7 @@ if grep -R -n -E 'SimulateToday|debug-fill-test-code|FillTestCode' --include='*.
   fail "debug hook present in server or core"
 fi
 
-if grep -R -n -E '调试填充|DEBUG_PHONE|DEBUG_CODE|DEBUG_INPUT' android --include='*.kt' --include='*.xml' --exclude-dir=build | grep -v '/src/debug/'; then
+if grep -R -n -E '调试填充|DEBUG_PHONE|DEBUG_CODE|DEBUG_INPUT|模拟今天|立即生成今日汇总|Mate 70 Pro 调试' android --include='*.kt' --include='*.xml' --exclude-dir=build | grep -v '/src/debug/'; then
   fail "debug login hook is present outside the debug source set"
 fi
 
