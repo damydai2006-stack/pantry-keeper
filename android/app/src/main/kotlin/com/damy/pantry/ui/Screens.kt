@@ -1,9 +1,12 @@
 package com.damy.pantry.ui
 
+import android.app.NotificationManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -81,6 +84,9 @@ import com.damy.pantry.data.PantryRepository
 import com.damy.pantry.data.categoryLabel
 import com.damy.pantry.data.daysLabel
 import com.damy.pantry.data.groupItems
+import com.damy.pantry.data.undoCountdown
+import com.damy.pantry.data.userFacingMessage
+import com.pantrykeeper.core.model.FieldLimits
 import com.damy.pantry.debug.DebugInput
 import com.damy.pantry.debug.LoginDebug
 import com.pantrykeeper.core.date.ShelfUnit
@@ -122,9 +128,9 @@ fun LoginScreen(vm: LoginViewModel, onFamily: () -> Unit, onHome: () -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = code,
-                onValueChange = { vm.code.value = it.take(12) },
+                onValueChange = { vm.code.value = FieldLimits.takeCodePoints(it, 64) },
                 modifier = Modifier.weight(1f).testTag("login_code"),
-                placeholder = { Text("6 位验证码") },
+                placeholder = { Text("验证码") },
                 singleLine = true,
             )
             Spacer(Modifier.width(8.dp))
@@ -132,7 +138,7 @@ fun LoginScreen(vm: LoginViewModel, onFamily: () -> Unit, onHome: () -> Unit) {
                 onClick = { vm.requestCode() },
                 enabled = vm.canRequestCode(),
                 modifier = Modifier.heightIn(min = 48.dp).testTag("login_code_btn"),
-            ) { Text(if (seconds > 0) "${seconds} 秒" else "获取验证码") }
+            ) { Text(if (seconds > 0) "${seconds} 秒后可重发" else "获取验证码") }
         }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("login_agree").clickable { vm.agreed.value = !agreed }) {
             Checkbox(checked = agreed, onCheckedChange = { vm.agreed.value = it })
@@ -179,9 +185,9 @@ fun FamilyCreateScreen(repo: PantryRepository, onBack: () -> Unit, onDone: () ->
             Text("家庭名称", fontWeight = FontWeight.Bold, fontSize = 16.sp)
             OutlinedTextField(
                 name,
-                { name = it.take(20) },
+                { name = FieldLimits.takeCodePoints(it, FieldLimits.FAMILY_NAME_MAX) },
                 modifier = Modifier.fillMaxWidth().testTag("family_name").onFocusChanged { state ->
-                    if (state.isFocused) DebugInput.bind { name = it.take(20) }
+                    if (state.isFocused) DebugInput.bind { name = FieldLimits.takeCodePoints(it, FieldLimits.FAMILY_NAME_MAX) }
                 },
                 placeholder = { Text("2 到 20 个字") },
             )
@@ -300,7 +306,8 @@ fun HomeScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(bar.text(), color = Surface, modifier = Modifier.weight(1f), fontSize = 16.sp)
-                TextButton(onClick = { listVm.undo() }, modifier = Modifier.testTag("undo_button")) { Text("撤销", color = Surface, fontWeight = FontWeight.Bold) }
+                Text(undoCountdown(bar.seconds), color = Surface, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 8.dp))
+                TextButton(onClick = { listVm.undo() }, modifier = Modifier.heightIn(min = 48.dp).testTag("undo_button")) { Text("撤销", color = Surface, fontWeight = FontWeight.Bold) }
             }
         }
         if (listVm.selecting.collectAsState().value && tab == "list") {
@@ -353,41 +360,45 @@ private fun ListPage(repo: PantryRepository, vm: ListViewModel, today: LocalDate
     val selected by vm.selected.collectAsState()
     val hint by vm.hint.collectAsState()
     val family by repo.family.collectAsState()
+    val notice by repo.notice.collectAsState()
     val groups = groupItems(today, items.filter { it.status == "in_stock" }, query)
     val stock = items.filter { it.status == "in_stock" }
     val expired = stock.count { ReminderRules.daysRemaining(today, LocalDate.parse(it.expiryDate)) < 0 }
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("清单", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text(family?.name.orEmpty(), color = TextSecondary, modifier = Modifier.padding(end = 8.dp))
-            TextButton(onClick = { vm.toggleManage() }, modifier = Modifier.testTag("list_manage").alpha(if (online) 1f else 0.4f)) {
-                Text(if (selecting) "取消" else "管理")
-            }
-        }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
-            if (!online) OfflineBanner()
-            hint?.let { Text(it, color = Danger, fontSize = 16.sp) }
-            OutlinedTextField(query, { vm.query.value = it }, modifier = Modifier.fillMaxWidth().testTag("list_search"), placeholder = { Text("搜索物品名称") }, singleLine = true)
-            Text("在库 ${stock.size} 件 · 已过期 $expired 件", color = TextSecondary, fontSize = 16.sp, modifier = Modifier.padding(vertical = 8.dp))
-            if (stock.isEmpty()) {
-                Column(Modifier.fillMaxWidth().padding(top = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("还没有物品", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    Text("扫码、拍照或手填，把家里的食品、药品和调料登记进来", color = TextSecondary, fontSize = 16.sp)
-                    Button(onClick = onAdd, modifier = Modifier.padding(top = 16.dp).testTag("empty_add"), shape = button, colors = ButtonDefaults.buttonColors(containerColor = Brand)) { Text("入库") }
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("清单", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(family?.name.orEmpty(), color = TextSecondary, modifier = Modifier.padding(end = 8.dp))
+                TextButton(onClick = { vm.toggleManage() }, modifier = Modifier.heightIn(min = 48.dp).testTag("list_manage").alpha(if (online) 1f else 0.4f)) {
+                    Text(if (selecting) "取消" else "管理")
                 }
             }
-            groups.forEach { group ->
-                Text("${group.title} ${group.items.size}", fontWeight = FontWeight.Bold, color = bucketColor(group.bucket), modifier = Modifier.padding(top = 12.dp, bottom = 8.dp))
-                group.items.forEach { item ->
-                    ItemCard(item, today, selecting, item.id in selected, { if (selecting) vm.toggle(item.id) else onEdit(item.id) }, { vm.toggle(item.id) })
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
+                if (!online) OfflineBanner(notice)
+                NotificationOffBanner()
+                hint?.let { Text(it, color = Danger, fontSize = 16.sp) }
+                OutlinedTextField(query, { vm.query.value = it }, modifier = Modifier.fillMaxWidth().testTag("list_search"), placeholder = { Text("搜索物品名称") }, singleLine = true)
+                Text("在库 ${stock.size} 件 · 已过期 $expired 件", color = TextSecondary, fontSize = 16.sp, modifier = Modifier.padding(vertical = 8.dp))
+                if (stock.isEmpty()) {
+                    Column(Modifier.fillMaxWidth().padding(top = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("还没有物品", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                        Text("扫码、拍照或手填，把家里的食品、药品和调料登记进来", color = TextSecondary, fontSize = 16.sp)
+                        Button(onClick = onAdd, modifier = Modifier.padding(top = 16.dp).heightIn(min = 48.dp).testTag("empty_add"), shape = button, colors = ButtonDefaults.buttonColors(containerColor = Brand)) { Text("入库") }
+                    }
                 }
+                groups.forEach { group ->
+                    Text("${group.title} ${group.items.size}件", fontWeight = FontWeight.Bold, color = bucketColor(group.bucket), modifier = Modifier.padding(top = 12.dp, bottom = 8.dp))
+                    group.items.forEach { item ->
+                        ItemCard(item, today, selecting, item.id in selected, { if (selecting) vm.toggle(item.id) else onEdit(item.id) }, { vm.toggle(item.id) })
+                    }
+                }
+                Spacer(Modifier.height(88.dp))
             }
-            Spacer(Modifier.height(72.dp))
         }
         if (!selecting && stock.isNotEmpty()) {
             Button(
                 onClick = onAdd,
-                modifier = Modifier.padding(20.dp).heightIn(min = 48.dp).align(Alignment.End).testTag("list_add").alpha(if (online) 1f else 0.4f),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp).heightIn(min = 48.dp).testTag("list_add").alpha(if (online) 1f else 0.4f),
                 shape = button,
                 colors = ButtonDefaults.buttonColors(containerColor = Brand),
             ) {
@@ -414,15 +425,15 @@ private fun ItemCard(item: CachedItem, today: LocalDate, selecting: Boolean, che
         }
         Column(Modifier.weight(1f).padding(12.dp)) {
             Text(item.name, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            Text("${categoryLabel(item.category)} · ${item.location ?: "未填位置"} · ${item.quantity}", fontSize = 16.sp, color = TextSecondary)
+            Text("${categoryLabel(item.category)} · ${item.location ?: "未填位置"} · ×${item.quantity}", fontSize = 16.sp, color = TextSecondary)
             Text("$expiry · $label", fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
         Row(
             Modifier.padding(end = 12.dp).clip(RoundedCornerShape(50)).background(bucketSoft(bucket)).padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(bucketIcon(bucket), contentDescription = label, tint = bucketColor(bucket), modifier = Modifier.size(16.dp))
-            Text(label, color = bucketColor(bucket), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Icon(bucketIcon(bucket), contentDescription = label, tint = bucketBadgeText(bucket), modifier = Modifier.size(16.dp))
+            Text(label, color = bucketBadgeText(bucket), fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -461,9 +472,9 @@ private fun FormBody(vm: ItemFormViewModel, editing: Boolean, onBack: () -> Unit
             Text("名称", fontWeight = FontWeight.Bold)
             OutlinedTextField(
                 name,
-                { vm.name.value = it.take(40); vm.refreshPreview() },
+                { vm.name.value = FieldLimits.takeCodePoints(it, FieldLimits.ITEM_NAME_MAX); vm.refreshPreview() },
                 modifier = Modifier.fillMaxWidth().testTag("item_name").onFocusChanged { state ->
-                    if (state.isFocused) DebugInput.bind { vm.name.value = it.take(40); vm.refreshPreview() }
+                    if (state.isFocused) DebugInput.bind { vm.name.value = FieldLimits.takeCodePoints(it, FieldLimits.ITEM_NAME_MAX); vm.refreshPreview() }
                 },
                 placeholder = { Text("请输入物品名称") },
             )
@@ -481,12 +492,16 @@ private fun FormBody(vm: ItemFormViewModel, editing: Boolean, onBack: () -> Unit
             }
             Text("数量只作备注，不随状态变化，也不设单位。", color = TextSecondary, fontSize = 16.sp)
             Text("存放位置", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+            var addingLocation by remember { mutableStateOf(custom.isNotBlank()) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 locations.forEach { loc ->
-                    FilterChip(selected = location == loc && custom.isBlank(), onClick = { vm.location.value = loc; vm.customLocation.value = "" }, label = { Text(loc) })
+                    FilterChip(selected = location == loc && custom.isBlank(), onClick = { vm.location.value = loc; vm.customLocation.value = ""; addingLocation = false }, label = { Text(loc) })
                 }
+                FilterChip(selected = addingLocation, onClick = { addingLocation = true; vm.location.value = null }, label = { Text("＋ 新增位置") }, modifier = Modifier.testTag("add_location"))
             }
-            OutlinedTextField(custom, { vm.customLocation.value = it.take(12) }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("新增位置，最多 12 个字") })
+            if (addingLocation) {
+                OutlinedTextField(custom, { vm.customLocation.value = FieldLimits.takeCodePoints(it, FieldLimits.LOCATION_MAX) }, modifier = Modifier.fillMaxWidth().testTag("custom_location"), placeholder = { Text("新增位置，最多 12 个字") })
+            }
             Text("保质期或到期日", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(7 to ShelfUnit.DAY, 1 to ShelfUnit.MONTH, 6 to ShelfUnit.MONTH, 1 to ShelfUnit.YEAR, 2 to ShelfUnit.YEAR).forEach { (value, unit) ->
@@ -526,7 +541,7 @@ private fun FormBody(vm: ItemFormViewModel, editing: Boolean, onBack: () -> Unit
                 }
             }
             Text("备注（选填）", fontWeight = FontWeight.Bold)
-            OutlinedTextField(note, { vm.note.value = it.take(200) }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("例如：打开后放回冷藏") })
+            OutlinedTextField(note, { vm.note.value = FieldLimits.takeCodePoints(it, FieldLimits.NOTE_MAX) }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("例如：打开后放回冷藏") })
             error?.let { Text(it, color = Danger, fontSize = 16.sp) }
             Spacer(Modifier.height(12.dp))
         }
@@ -594,7 +609,10 @@ private fun MinePage(repo: PantryRepository, online: Boolean, onMembers: () -> U
         Text(repo.session.displayName ?: "用户", color = TextSecondary)
         Choice(family?.name ?: "家庭", "查看成员和邀请码", onMembers, "mine_family")
         Choice("每天 09:00", "提醒设置将在后续版本接入", { onStub("remind-time") }, "mine_remind")
-        TextButton(onClick = onLogout, modifier = Modifier.testTag("logout").alpha(if (online) 1f else 0.4f)) { Text("退出登录", color = Danger) }
+        val context = LocalContext.current
+        TextButton(onClick = {
+            if (!online) toast(context, "当前无网络。恢复网络后再退出，才能注销服务器上的会话。") else onLogout()
+        }, modifier = Modifier.testTag("logout").alpha(if (online) 1f else 0.4f)) { Text("退出登录", color = Danger) }
     }
 }
 
@@ -605,6 +623,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var dialog by remember { mutableStateOf<String?>(null) }
+    var memberNotice by remember { mutableStateOf<String?>(null) }
     var successor by remember { mutableStateOf<Member?>(null) }
     var target by remember { mutableStateOf<Member?>(null) }
     var rename by remember { mutableStateOf("") }
@@ -612,6 +631,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
     Column(Modifier.fillMaxSize().background(Bg).verticalScroll(rememberScrollState()).padding(20.dp)) {
         TopBar("家庭成员", onBack)
         if (!online) OfflineBanner()
+        memberNotice?.let { Text(it, color = Danger, fontSize = 16.sp, modifier = Modifier.testTag("member_notice")) }
         if (current == null) {
             Text("还没有家庭")
             return@Column
@@ -619,7 +639,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(current.name, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             if (current.role == "admin") {
-                TextButton(onClick = { rename = current.name; dialog = "rename" }, enabled = online) { Text("编辑") }
+                TextButton(onClick = { rename = current.name; dialog = "rename" }, enabled = online, modifier = Modifier.heightIn(min = 48.dp).testTag("rename_family")) { Text("编辑") }
             }
         }
         Column(Modifier.fillMaxWidth().clip(card).background(Surface).padding(16.dp)) {
@@ -627,28 +647,27 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
             Text(current.inviteCode.orEmpty(), fontSize = 28.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp, modifier = Modifier.testTag("invite_code"))
             Text("有效期至 ${current.inviteExpiresAt?.take(10).orEmpty()}，所有成员可复制和分享。", color = TextSecondary, fontSize = 16.sp)
             Row {
-                OutlinedButton(onClick = { copy(context, current.inviteCode.orEmpty()); toast(context, "邀请码已复制") }) { Text("复制") }
+                OutlinedButton(onClick = { copy(context, current.inviteCode.orEmpty()); toast(context, "邀请码已复制") }, modifier = Modifier.heightIn(min = 48.dp)) { Text("复制") }
                 Spacer(Modifier.width(8.dp))
                 OutlinedButton(onClick = {
                     val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "邀请你加入${current.name}，邀请码 ${current.inviteCode}")
                     context.startActivity(Intent.createChooser(send, "分享邀请码"))
-                }) { Text("分享") }
+                }, modifier = Modifier.heightIn(min = 48.dp)) { Text("分享") }
                 if (current.role == "admin") {
                     Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = { dialog = "reset" }, enabled = online, modifier = Modifier.testTag("invite_reset")) { Text("重置") }
+                    OutlinedButton(onClick = { dialog = "reset" }, enabled = online, modifier = Modifier.heightIn(min = 48.dp).testTag("invite_reset")) { Text("重置") }
                 }
             }
         }
         current.members.forEach { member ->
             val self = member.userId == repo.session.userId
-            val title = if (self) (repo.session.displayName ?: "我") else "成员 ${member.userId.take(4)}"
             Column(Modifier.fillMaxWidth().padding(top = 8.dp).clip(card).background(Surface).padding(12.dp)) {
-                Text(title, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text(if (member.role == "admin") "管理员" else "成员", color = TextSecondary)
+                Text(member.visibleName(), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text("${if (member.role == "admin") "管理员" else "成员"} · ${member.joinedLabel()}", color = TextSecondary)
                 if (current.role == "admin" && !self) {
                     Row {
-                        TextButton(onClick = { target = member; dialog = "admin" }, enabled = online) { Text("设为管理员") }
-                        TextButton(onClick = { target = member; dialog = "remove" }, enabled = online) { Text("移除", color = Danger) }
+                        TextButton(onClick = { target = member; dialog = "admin" }, enabled = online, modifier = Modifier.heightIn(min = 48.dp).testTag("make_admin_${member.displayName}")) { Text("设为管理员") }
+                        TextButton(onClick = { target = member; dialog = "remove" }, enabled = online, modifier = Modifier.heightIn(min = 48.dp).testTag("remove_member")) { Text("移除", color = Danger) }
                     }
                 }
             }
@@ -667,7 +686,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
             },
             enabled = online,
             modifier = Modifier.fillMaxWidth().padding(top = 16.dp).heightIn(min = 48.dp).testTag("leave_family"),
-            colors = ButtonDefaults.buttonColors(containerColor = Danger),
+            colors = ButtonDefaults.buttonColors(containerColor = ExpiredSoft, contentColor = Danger),
             shape = button,
         ) { Text("退出家庭") }
     }
@@ -675,8 +694,16 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
         "rename" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("家庭名称") },
-            text = { OutlinedTextField(rename, { rename = it.take(20) }, modifier = Modifier.testTag("rename_field")) },
-            confirmButton = { TextButton(onClick = { scope.launch { runCatching { repo.renameFamily(rename) }; dialog = null } }) { Text("保存") } },
+            text = { OutlinedTextField(rename, { rename = FieldLimits.takeCodePoints(it, FieldLimits.FAMILY_NAME_MAX) }, modifier = Modifier.testTag("rename_field")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        runCatching { repo.renameFamily(rename) }
+                            .onSuccess { dialog = null }
+                            .onFailure { memberNotice = userFacingMessage(it); dialog = null }
+                    }
+                }) { Text("保存") }
+            },
             dismissButton = { TextButton(onClick = { dialog = null }) { Text("取消") } },
         )
         "reset" -> AlertDialog(
@@ -686,8 +713,9 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        runCatching { repo.resetInvite() }.onSuccess { toast(context, "邀请码已重置，有效期重新计算为 7 天") }
-                        dialog = null
+                        runCatching { repo.resetInvite() }
+                            .onSuccess { toast(context, "邀请码已重置，有效期重新计算为 7 天"); dialog = null }
+                            .onFailure { memberNotice = userFacingMessage(it); dialog = null }
                     }
                 }) { Text("重置") }
             },
@@ -696,29 +724,61 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
         "remove" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("移除成员") },
-            text = { Text("确定将${target?.userId?.take(4)}移出「${current?.name}」？移出后对方将立即看不到该家庭的物品。") },
-            confirmButton = { TextButton(onClick = { scope.launch { target?.let { repo.removeMember(it.userId) }; dialog = null } }) { Text("移除", color = Danger) } },
+            text = { Text("确定将${target?.visibleName()}移出「${current?.name}」？移出后对方将立即看不到该家庭的物品。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        runCatching { target?.let { repo.removeMember(it.userId) } }
+                            .onSuccess { dialog = null }
+                            .onFailure { memberNotice = userFacingMessage(it); dialog = null }
+                    }
+                }, modifier = Modifier.testTag("confirm_remove")) { Text("移除", color = Danger) }
+            },
             dismissButton = { TextButton(onClick = { dialog = null }) { Text("取消") } },
         )
         "admin" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("设为管理员") },
-            text = { Text("确定将${target?.userId?.take(4)}设为管理员？转让后你将变为普通成员。") },
-            confirmButton = { TextButton(onClick = { scope.launch { target?.let { repo.transferAdmin(it.userId) }; dialog = null } }, modifier = Modifier.testTag("confirm_admin")) { Text("确认转让") } },
+            text = { Text("确定将${target?.visibleName()}设为管理员？转让后你将变为普通成员。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        runCatching { target?.let { repo.transferAdmin(it.userId) } }
+                            .onSuccess { dialog = null }
+                            .onFailure { memberNotice = userFacingMessage(it); dialog = null }
+                    }
+                }, modifier = Modifier.testTag("confirm_admin")) { Text("确认转让") }
+            },
             dismissButton = { TextButton(onClick = { dialog = null }) { Text("取消") } },
         )
         "leave-member" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("退出家庭？") },
             text = { Text("退出后将不能再看到该家庭的物品。邀请码有效期内可再加入。") },
-            confirmButton = { TextButton(onClick = { scope.launch { repo.leaveFamily(); onLeft() } }) { Text("退出", color = Danger) } },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        runCatching { repo.leaveFamily() }
+                            .onSuccess { onLeft() }
+                            .onFailure { memberNotice = userFacingMessage(it); dialog = null }
+                    }
+                }) { Text("退出", color = Danger) }
+            },
             dismissButton = { TextButton(onClick = { dialog = null }) { Text("取消") } },
         )
         "leave-last" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("退出家庭？") },
             text = { Text("你是最后一名成员。家庭将保留 30 天后删除。保留期内不可再加入，邀请码将失效。") },
-            confirmButton = { TextButton(onClick = { scope.launch { repo.leaveFamily(); onLeft() } }, modifier = Modifier.testTag("confirm_leave")) { Text("退出", color = Danger) } },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        runCatching { repo.leaveFamily() }
+                            .onSuccess { onLeft() }
+                            .onFailure { memberNotice = userFacingMessage(it); dialog = null }
+                    }
+                }, modifier = Modifier.testTag("confirm_leave")) { Text("退出", color = Danger) }
+            },
             dismissButton = { TextButton(onClick = { dialog = null }) { Text("取消") } },
         )
         "leave-transfer" -> AlertDialog(
@@ -730,7 +790,7 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
                     current?.members?.filter { it.userId != repo.session.userId }?.forEach { member ->
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { successor = member }) {
                             RadioButton(selected = successor?.userId == member.userId, onClick = { successor = member })
-                            Text("成员 ${member.userId.take(4)}")
+                            Text("${member.visibleName()} · ${member.joinedLabel()}")
                         }
                     }
                     Text("退出后将不能再看到该家庭的物品。邀请码有效期内可再加入。")
@@ -740,11 +800,20 @@ fun MembersScreen(repo: PantryRepository, onBack: () -> Unit, onLeft: () -> Unit
                 TextButton(onClick = {
                     val next = successor ?: return@TextButton
                     scope.launch {
-                        repo.transferAdmin(next.userId)
-                        repo.leaveFamily()
-                        onLeft()
+                        val transferred = runCatching { repo.transferAdmin(next.userId) }
+                        if (transferred.isFailure) {
+                            memberNotice = userFacingMessage(transferred.exceptionOrNull()!!)
+                            dialog = null
+                            return@launch
+                        }
+                        val left = runCatching { repo.leaveFamily() }
+                        if (left.isSuccess) onLeft()
+                        else {
+                            memberNotice = "管理员已转让，但退出失败。${userFacingMessage(left.exceptionOrNull()!!)}"
+                            dialog = null
+                        }
                     }
-                }) { Text("转让并退出", color = Danger) }
+                }, modifier = Modifier.testTag("confirm_transfer_leave")) { Text("转让并退出", color = Danger) }
             },
             dismissButton = { TextButton(onClick = { dialog = null }) { Text("取消") } },
         )
@@ -845,14 +914,44 @@ private fun SheetRow(title: String, subtitle: String, enabled: Boolean, tag: Str
 }
 
 @Composable
-private fun OfflineBanner() {
+private fun OfflineBanner(message: String? = null) {
     Text(
-        "当前无网络，仅可查看，暂不能修改。",
+        message ?: "当前无网络，仅可查看，暂不能修改。",
         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(12.dp)).background(MonthSoft).padding(12.dp).testTag("offline_banner"),
         color = Month,
         fontSize = 16.sp,
     )
 }
+
+@Composable
+private fun NotificationOffBanner() {
+    val context = LocalContext.current
+    val manager = context.getSystemService(NotificationManager::class.java)
+    val blocked = if (Build.VERSION.SDK_INT >= 33) {
+        context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+    } else {
+        manager?.areNotificationsEnabled() == false
+    }
+    if (!blocked) return
+    Row(
+        Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(12.dp)).background(BrandSoft).padding(start = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("未开启通知，可能错过到期提醒。", modifier = Modifier.weight(1f), color = Text, fontSize = 16.sp)
+        TextButton(
+            onClick = {
+                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                context.startActivity(intent)
+            },
+            modifier = Modifier.heightIn(min = 48.dp).testTag("open_notification_settings"),
+        ) { Text("去设置") }
+    }
+}
+
+private fun Member.visibleName(): String = displayName.trim().ifEmpty { "用户" }
+
+private fun Member.joinedLabel(): String = "加入 ${joinedAt.take(10)}"
 
 @Composable
 private fun TopBar(title: String, onBack: () -> Unit) {

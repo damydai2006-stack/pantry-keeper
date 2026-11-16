@@ -24,6 +24,17 @@ val Month = Color(0xFF8A5A00)
 val MonthSoft = Color(0xFFFBF3D0)
 val Later = Color(0xFF166534)
 val LaterSoft = Color(0xFFE5F3EA)
+private val ExpiredText = Color(0xFF8B1A14)
+private val SoonText = Color(0xFF8A3D00)
+private val MonthText = Color(0xFF6B4E00)
+private val LaterText = Color(0xFF145A32)
+
+fun bucketBadgeText(bucket: ListBucket): Color = when (bucket) {
+    ListBucket.EXPIRED -> ExpiredText
+    ListBucket.SOON -> SoonText
+    ListBucket.MONTH -> MonthText
+    ListBucket.LATER -> LaterText
+}
 
 fun bucketColor(bucket: ListBucket): Color = when (bucket) {
     ListBucket.EXPIRED -> Expired

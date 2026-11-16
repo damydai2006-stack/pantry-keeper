@@ -23,6 +23,7 @@ data class CachedItem(
 @Serializable
 data class Member(
     val userId: String,
+    val displayName: String = "",
     val role: String,
     val joinedAt: String,
 )
@@ -80,6 +81,13 @@ data class ItemDraft(
 class PantryCallException(val status: Int, val code: String, message: String) : Exception(message)
 
 class OfflineException : Exception("恢复网络后再修改")
+
+fun userFacingMessage(error: Throwable): String = when (error) {
+    is OfflineException -> error.message ?: "恢复网络后再修改"
+    is PantryCallException -> error.message ?: "操作失败"
+    is java.io.IOException -> "当前无网络，请稍后重试"
+    else -> "操作失败，请稍后重试"
+}
 
 sealed interface AppEvent {
     data object Revoked : AppEvent

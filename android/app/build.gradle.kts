@@ -54,6 +54,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
     }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 kotlin {
@@ -77,4 +81,28 @@ dependencies {
     implementation(libs.navigation.compose)
     implementation(libs.serialization.json)
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.79.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.79.0")
+    testImplementation("org.robolectric:robolectric:4.18")
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnit()
+    systemProperty("roborazzi.record", "true")
+    systemProperty("pantry.shots", rootProject.file("docs/screenshots/pr4").absolutePath)
+    systemProperty("robolectric.pixelCopyRenderMode", "hardware")
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    doFirst {
+        val url = injected("PANTRY_SERVER_URL", "")
+        val pins = injected("PANTRY_CA_PINS", "")
+        check(url.startsWith("https://")) { "Release 构建需要 https 的 PANTRY_SERVER_URL" }
+        check(pins.split(',').map { it.trim() }.any { it.startsWith("sha256/") }) {
+            "Release 构建需要 PANTRY_CA_PINS"
+        }
+    }
 }

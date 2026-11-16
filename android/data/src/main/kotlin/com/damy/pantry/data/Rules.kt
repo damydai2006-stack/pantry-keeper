@@ -19,7 +19,7 @@ fun listBucket(today: LocalDate, expiry: LocalDate): ListBucket = when (Reminder
 
 fun bucketTitle(bucket: ListBucket): String = when (bucket) {
     ListBucket.EXPIRED -> "已过期"
-    ListBucket.SOON -> "0–7 天"
+    ListBucket.SOON -> "7 天内（含今天）"
     ListBucket.MONTH -> "8–30 天"
     ListBucket.LATER -> "更远"
 }
@@ -61,8 +61,11 @@ fun shelfOrigin(today: LocalDate, production: LocalDate?): String =
 
 fun undoBarText(action: String, count: Int, seconds: Int, skipped: Int): String {
     val verb = if (action == "discarded") "已处理" else "已用完"
-    return "已将 $count 件标记为$verb，已移入历史 · 跳过 $skipped 件 · $seconds 秒"
+    val base = "已将 $count 件标记为$verb，已移入历史"
+    return if (skipped > 0) "$base · $skipped 件已被他人修改，未撤销" else base
 }
+
+fun undoCountdown(seconds: Int): String = "$seconds 秒"
 
 fun normalizeInvite(raw: String): String? {
     val s = raw.trim().uppercase().replace(" ", "")

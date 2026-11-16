@@ -3,6 +3,7 @@ package com.damy.pantry.data
 import com.pantrykeeper.core.model.FieldLimits
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -25,10 +26,12 @@ class PantryRepository(
     val session: SessionStore,
     private val scope: CoroutineScope,
     private val today: () -> LocalDate = { shanghaiToday() },
+    private val io: CoroutineContext = Dispatchers.IO,
 ) {
     val items = MutableStateFlow<List<CachedItem>>(emptyList())
     val family = MutableStateFlow<Family?>(null)
     val online = MutableStateFlow(true)
+    val notice = MutableStateFlow<String?>(null)
     val events = MutableSharedFlow<AppEvent>(extraBufferCapacity = 16)
 
     @Volatile private var foreground = false
@@ -37,6 +40,7 @@ class PantryRepository(
 
     fun setOnline(value: Boolean) {
         online.value = value
+        if (value) notice.value = null
     }
 
     fun restoreFromCache() {
@@ -47,17 +51,18 @@ class PantryRepository(
     suspend fun boot() {
         restoreFromCache()
         if (session.token == null || !online.value) return
-        guard {
-            val me = api.me()
-            session.userId = me.userId
-            session.displayName = me.displayName
-            if (me.familyId == null) {
-                family.value = null
-                session.saveFamily(null)
-                publish(emptyList())
-            } else {
-                pull()
+        try {
+            guard {
+                val me = api.me()
+                session.userId = me.userId
+                session.displayName = me.displayName
+                if (me.familyId == null) wipeFamilyCache() else pull()
             }
+        } catch (_: java.io.IOException) {
+            setOnline(false)
+            notice.value = "暂时连不上服务器"
+        } catch (_: PantryCallException) {
+            // 401 and not_in_family already wiped inside guard.
         }
     }
 
@@ -89,12 +94,13 @@ class PantryRepository(
 
     suspend fun login(phone: String, code: String) = online {
         val result = api.login(phone, code)
+        wipeFamilyCache()
         session.token = result.token
         session.userId = result.userId
         session.displayName = result.displayName
         session.phoneMask = maskPhone(phone)
         val me = api.me()
-        if (me.familyId != null) pull() else family.value = null
+        if (me.familyId != null) pull() else wipeFamilyCache()
     }
 
     suspend fun logout() {
@@ -135,10 +141,7 @@ class PantryRepository(
 
     suspend fun leaveFamily() = online {
         api.leaveFamily()
-        family.value = null
-        session.saveFamily(null)
-        publish(emptyList())
-        cache.setCursor(0)
+        wipeFamilyCache()
     }
 
     suspend fun saveNew(draft: ItemDraft) = online {
@@ -203,29 +206,25 @@ class PantryRepository(
     private fun ensureSocket() {
         if (closeSocket != null || session.token == null) return
         closeSocket = api.openSocket(
-            onText = { text ->
-                scope.launch {
-                    when {
-                        "session_revoked" in text -> {
-                            stopForeground()
-                            session.clear()
-                            publish(emptyList())
-                            family.value = null
-                            events.emit(AppEvent.Revoked)
-                        }
-                        "removed_from_family" in text -> {
-                            family.value = null
-                            session.saveFamily(null)
-                            publish(emptyList())
-                            cache.setCursor(0)
-                            events.emit(AppEvent.Removed)
-                        }
-                        "changed" in text -> runCatching { pull() }
-                    }
-                }
-            },
+            onText = { text -> scope.launch { handleSocket(text) } },
             onClosed = { closeSocket = null },
         )
+    }
+
+    internal suspend fun handleSocket(text: String) {
+        when {
+            "session_revoked" in text -> {
+                stopForeground()
+                session.clear()
+                wipeFamilyCache()
+                events.emit(AppEvent.Revoked)
+            }
+            "removed_from_family" in text -> {
+                wipeFamilyCache()
+                events.emit(AppEvent.Removed)
+            }
+            "changed" in text -> runCatching { pull() }
+        }
     }
 
     private suspend fun <T> online(block: suspend () -> T): T {
@@ -234,19 +233,28 @@ class PantryRepository(
     }
 
     private suspend fun <T> guard(block: suspend () -> T): T = try {
-        withContext(Dispatchers.IO) { block() }
+        withContext(io) { block() }
     } catch (e: PantryCallException) {
         if (e.status == 401) {
             stopForeground()
             session.clear()
+            wipeFamilyCache()
             events.emit(AppEvent.Revoked)
         } else if (e.status == 403 && e.code == "not_in_family") {
-            family.value = null
-            session.saveFamily(null)
-            publish(emptyList())
+            wipeFamilyCache()
             events.emit(AppEvent.Removed)
         }
         throw e
+    }
+
+    private fun wipeFamilyCache() {
+        closeSocket?.invoke()
+        closeSocket = null
+        cache.replace(emptyList())
+        cache.setCursor(0)
+        session.saveFamily(null)
+        items.value = emptyList()
+        family.value = null
     }
 
     private fun validate(draft: ItemDraft) {

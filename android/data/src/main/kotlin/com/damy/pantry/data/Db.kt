@@ -57,11 +57,13 @@ class MemorySession : SessionStore {
     }
 }
 
-class PrefSession(context: Context) : SessionStore {
+class PrefSession(context: Context, private val crypto: SessionCrypto = AndroidKeystoreSession.crypto()) : SessionStore {
     private val prefs = context.getSharedPreferences("pantry", Context.MODE_PRIVATE)
     override var token: String?
-        get() = prefs.getString("token", null)
-        set(value) = prefs.edit().putString("token", value).apply()
+        get() = prefs.getString("token", null)?.let { runCatching { crypto.decrypt(it) }.getOrNull() }
+        set(value) {
+            prefs.edit().putString("token", value?.let { crypto.encrypt(it) }).apply()
+        }
     override var userId: String?
         get() = prefs.getString("user", null)
         set(value) = prefs.edit().putString("user", value).apply()

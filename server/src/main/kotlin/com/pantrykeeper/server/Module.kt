@@ -112,6 +112,7 @@ fun Application.module(
             return
         }
         hub.register(ctx.userId, family, ctx.sessionId, this)
+        send(io.ktor.websocket.Frame.Text("""{"t":"ready"}"""))
         val watch = hub.watch(ctx.sessionId)
         try {
             for (frame in incoming) {

@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <permission
+        android:name="com.damy.pantry.permission.DEBUG_INPUT"
+        android:protectionLevel="signature" />
     <application android:usesCleartextTraffic="true">
         <receiver
             android:name="com.damy.pantry.debug.DebugInputReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:permission="com.damy.pantry.permission.DEBUG_INPUT">
             <intent-filter>
                 <action android:name="com.damy.pantry.DEBUG_INPUT" />
             </intent-filter>

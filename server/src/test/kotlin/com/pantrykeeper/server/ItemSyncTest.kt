@@ -209,39 +209,42 @@ class ItemSyncTest {
             setBody(JoinRequest(code))
         }
         val ws = wsClient()
-        val started = CountDownLatch(1)
-        val frame = AtomicReference<String>()
-        val startedAt = AtomicReference(0L)
-        val thread = Thread {
-            runBlocking {
-                ws.webSocket("/api/v1/ws", request = { header(HttpHeaders.Authorization, "Bearer $member") }) {
-                    started.countDown()
-                    startedAt.set(System.nanoTime())
-                    val text = (incoming.receive() as Frame.Text).readText()
-                    frame.set(text)
+        repeat(20) { n ->
+            val started = CountDownLatch(1)
+            val frame = AtomicReference<String>()
+            val thread = Thread {
+                runBlocking {
+                    ws.webSocket("/api/v1/ws", request = { header(HttpHeaders.Authorization, "Bearer $member") }) {
+                        val ready = (incoming.receive() as Frame.Text).readText()
+                        check(ready.contains("\"t\":\"ready\""))
+                        started.countDown()
+                        frame.set((incoming.receive() as Frame.Text).readText())
+                    }
                 }
             }
+            thread.isDaemon = true
+            thread.start()
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            val before = System.nanoTime()
+            client.post("/api/v1/items") {
+                bearer(admin)
+                contentType(ContentType.Application.Json)
+                setBody(CreateItemRequest(name = "通知物$n", expiryDate = "2027-01-02"))
+            }
+            thread.join(10_000)
+            val text = frame.get()
+            assertNotNull(text)
+            assertTrue(text.contains("\"t\":\"changed\""))
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - before) < 10_000)
         }
-        thread.isDaemon = true
-        thread.start()
-        assertTrue(started.await(5, TimeUnit.SECONDS))
-        val before = System.nanoTime()
-        client.post("/api/v1/items") {
-            bearer(admin)
-            contentType(ContentType.Application.Json)
-            setBody(CreateItemRequest(name = "通知物", expiryDate = "2027-01-02"))
-        }
-        thread.join(10_000)
-        val text = frame.get()
-        assertNotNull(text)
-        assertTrue(text.contains("\"t\":\"changed\""))
-        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - before) < 10_000)
 
         val removedGate = CountDownLatch(1)
         val removedText = AtomicReference<String>()
         val thread2 = Thread {
             runBlocking {
                 ws.webSocket("/api/v1/ws", request = { header(HttpHeaders.Authorization, "Bearer $member") }) {
+                    val ready = (incoming.receive() as Frame.Text).readText()
+                    check(ready.contains("\"t\":\"ready\""))
                     removedGate.countDown()
                     removedText.set((incoming.receive() as Frame.Text).readText())
                 }

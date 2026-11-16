@@ -2,6 +2,7 @@ package com.damy.pantry
 
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -45,14 +46,18 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val repo = (application as PantryApp).repo
         val connectivity = getSystemService(ConnectivityManager::class.java)
-        repo.setOnline(connectivity.activeNetwork != null)
+        repo.setOnline(connectivityOnline(connectivity))
         connectivity.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                repo.setOnline(true)
+                repo.setOnline(connectivityOnline(connectivity))
             }
 
             override fun onLost(network: Network) {
-                repo.setOnline(connectivity.activeNetwork == null)
+                repo.setOnline(connectivityOnline(connectivity))
+            }
+
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                repo.setOnline(connectivityOnline(connectivity))
             }
         })
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
@@ -81,7 +86,12 @@ private fun PantryRoot(repo: PantryRepository, modifier: Modifier) {
     NavHost(navController = nav, startDestination = "boot", modifier = modifier) {
         composable("boot") {
             androidx.compose.runtime.LaunchedEffect(Unit) {
-                repo.boot()
+                try {
+                    repo.boot()
+                } catch (_: Exception) {
+                    repo.setOnline(false)
+                    if (repo.notice.value == null) repo.notice.value = "暂时连不上服务器"
+                }
                 val dest = when {
                     repo.session.token == null -> "login"
                     repo.family.value == null -> "family"
