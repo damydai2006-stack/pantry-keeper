@@ -3,7 +3,7 @@
   <name>__SERVICE_ID__</name>
   <description>Pantry Keeper Caddy</description>
   <executable>__INSTALL_ROOT__\bin\caddy.exe</executable>
-  <arguments>run --config __INSTALL_ROOT__\conf\Caddyfile --adapter caddyfile</arguments>
+  <arguments>run --config "__INSTALL_ROOT__\conf\Caddyfile" --adapter caddyfile</arguments>
   <workingdirectory>__INSTALL_ROOT__</workingdirectory>
   <startmode>Automatic</startmode>
   <onfailure action="restart" delay="10 sec"/>

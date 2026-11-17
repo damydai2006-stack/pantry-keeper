@@ -4,7 +4,9 @@ cd "$(dirname "$0")/.."
 ./gradlew check --no-daemon
 if command -v pwsh >/dev/null 2>&1; then
   pwsh -NoProfile -File deploy/windows/install-secrets.test.ps1
+  pwsh -NoProfile -File deploy/windows/deploy-scripts.test.ps1
 fi
+./gradlew :server:verifyShadowMigrate --no-daemon
 if [[ -f web/package.json ]]; then
   (cd web && npm test)
 else

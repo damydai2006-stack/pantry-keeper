@@ -54,6 +54,7 @@ function Get-PantryPsqlPlan {
 \getenv pantry_pass PANTRY_DB_PASSWORD
 \getenv pantry_db PANTRY_DB_NAME
 \getenv pantry_reset PANTRY_RESET_PASSWORD
+SET log_statement = 'none';
 SELECT CASE
   WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'pantry_user')
     THEN format('CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 10', :'pantry_user', :'pantry_pass')
@@ -214,6 +215,66 @@ function New-PantryCsprngText {
     return [Convert]::ToBase64String($buf)
 }
 
+function New-PantryScramVerifier {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Password,
+        [int]$Iterations = 4096
+    )
+    if ($Iterations -lt 1) { throw 'SCRAM iteration count must be positive.' }
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $salt = New-Object byte[] 16
+        $rng.GetBytes($salt)
+    } finally {
+        $rng.Dispose()
+    }
+    $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes(
+        ([System.Text.Encoding]::UTF8.GetBytes($Password)),
+        $salt,
+        $Iterations,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+    try {
+        $salted = $kdf.GetBytes(32)
+    } finally {
+        $kdf.Dispose()
+    }
+    $hmac = New-Object System.Security.Cryptography.HMACSHA256
+    try {
+        $hmac.Key = $salted
+        $clientKey = $hmac.ComputeHash([System.Text.Encoding]::ASCII.GetBytes('Client Key'))
+        $serverKey = $hmac.ComputeHash([System.Text.Encoding]::ASCII.GetBytes('Server Key'))
+    } finally {
+        $hmac.Dispose()
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $storedKey = $sha.ComputeHash($clientKey)
+    } finally {
+        $sha.Dispose()
+    }
+    return ('SCRAM-SHA-256${0}:{1}${2}:{3}' -f $Iterations, [Convert]::ToBase64String($salt), [Convert]::ToBase64String($storedKey), [Convert]::ToBase64String($serverKey))
+}
+
+function Split-PantryEnvLines {
+    param([AllowEmptyString()][string]$Text = '')
+    $lines = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrEmpty($Text)) { return ,@() }
+    $start = 0
+    $n = $Text.Length
+    for ($i = 0; $i -lt $n; $i++) {
+        $ch = $Text[$i]
+        $isCr = ($ch -eq [char]13)
+        $isLf = ($ch -eq [char]10)
+        if (-not $isCr -and -not $isLf) { continue }
+        $len = $i - $start
+        if ($len -le 0) { [void]$lines.Add('') } else { [void]$lines.Add($Text.Substring($start, $len)) }
+        if ($isCr -and ($i + 1) -lt $n -and $Text[$i + 1] -eq [char]10) { $i++ }
+        $start = $i + 1
+    }
+    if ($start -lt $n) { [void]$lines.Add($Text.Substring($start)) }
+    foreach ($line in $lines) { Write-Output $line }
+}
+
 function Test-PantryEnvHasKey {
     param(
         [AllowEmptyString()][string]$Text = '',
@@ -229,7 +290,7 @@ function Get-PantryEnvValue {
         [object]$Missing = ''
     )
     if ([string]::IsNullOrEmpty($Text)) { return $Missing }
-    foreach ($raw in ($Text -split "`r?`n")) {
+    foreach ($raw in @(Split-PantryEnvLines -Text $Text)) {
         $line = $raw.Trim()
         if ($line -eq '' -or $line.StartsWith('#')) { continue }
         $eq = $line.IndexOf('=')
@@ -248,7 +309,7 @@ function Merge-PantryEnvText {
     $seen = @{}
     $lines = @()
     if (-not [string]::IsNullOrEmpty($Existing)) {
-        foreach ($raw in ($Existing -split "`r?`n", -1)) {
+        foreach ($raw in @(Split-PantryEnvLines -Text $Existing)) {
             $trim = $raw.Trim()
             if ($trim -ne '' -and -not $trim.StartsWith('#')) {
                 $eq = $trim.IndexOf('=')
@@ -526,10 +587,31 @@ function Test-PantryCertWarning {
 
 function Format-PantryPsArg {
     param([AllowEmptyString()][string]$Text = '')
-    if ($Text -match '[\s"]') {
-        return '"' + ($Text -replace '"', '\"') + '"'
+    if ($Text -notmatch '[\s"]') { return $Text }
+    # CommandLineToArgvW: backslashes that precede a quote are escaped, including the closing quote.
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    $slashes = 0
+    foreach ($ch in $Text.ToCharArray()) {
+        if ($ch -eq '\') { $slashes++; continue }
+        if ($ch -eq '"') {
+            for ($i = 0; $i -lt (($slashes * 2) + 1); $i++) { [void]$sb.Append('\') }
+            [void]$sb.Append('"')
+            $slashes = 0
+            continue
+        }
+        for ($i = 0; $i -lt $slashes; $i++) { [void]$sb.Append('\') }
+        $slashes = 0
+        [void]$sb.Append($ch)
     }
-    return $Text
+    for ($i = 0; $i -lt ($slashes * 2); $i++) { [void]$sb.Append('\') }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function Trim-PantryPath {
+    param([AllowEmptyString()][string]$Path = '')
+    return $Path.TrimEnd('\')
 }
 
 function Get-PantryBackupTaskArgument {
@@ -544,6 +626,9 @@ function Get-PantryBackupTaskArgument {
     Assert-SafeIdent -Name $DatabaseName
     Assert-SafeIdent -Name $DatabaseUser
     if ($Keep -lt 1) { throw 'Keep must be at least 1.' }
+    $ScriptPath = Trim-PantryPath -Path $ScriptPath
+    $InstallRoot = Trim-PantryPath -Path $InstallRoot
+    $PostgresBin = Trim-PantryPath -Path $PostgresBin
     $parts = @(
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
@@ -557,4 +642,110 @@ function Get-PantryBackupTaskArgument {
     $joined = $parts -join ' '
     if ($joined -match '(?i)PGPASSWORD|PANTRY_DB_PASSWORD=') { throw 'Backup task argument must not carry a password.' }
     return $joined
+}
+
+function Get-PantryWinSwSpec {
+    # v2.12.0 release assets do not publish a SHA256. Do not invent one.
+    return @{ Version = '2.12.0'; FileName = 'WinSW-x64.exe' }
+}
+
+function Convert-PantryXmlText {
+    param([AllowEmptyString()][string]$Text = '')
+    $escaped = [System.Security.SecurityElement]::Escape($Text)
+    if ($null -eq $escaped) { return '' }
+    return $escaped
+}
+
+function Expand-PantryWinSwXml {
+    param(
+        [Parameter(Mandatory = $true)][string]$Template,
+        [Parameter(Mandatory = $true)][string]$ServiceId,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [Parameter(Mandatory = $true)][string]$ListenPort
+    )
+    $xml = $Template.Replace('__SERVICE_ID__', (Convert-PantryXmlText $ServiceId))
+    $xml = $xml.Replace('__INSTALL_ROOT__', (Convert-PantryXmlText $InstallRoot))
+    $xml = $xml.Replace('__LISTEN_PORT__', (Convert-PantryXmlText $ListenPort))
+    return $xml
+}
+
+function Test-PantryWindowsService {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    Assert-PantryScope -Names @($Name)
+    $row = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    return ($null -ne $row)
+}
+
+function Invoke-PantryServiceInstall {
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    Assert-PantryScope -Names @($Name)
+    # WinSW v2 status exits 0 for NonExistent. Never use that exit code.
+    if (Test-PantryWindowsService -Name $Name) {
+        Write-Host "$Name is already installed; leaving the service registration in place."
+        return
+    }
+    & $Exe install
+    if ($LASTEXITCODE -ne 0) { throw "$Name install failed." }
+}
+
+function Add-PantryFirewallRule {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][int]$Port
+    )
+    Assert-PantryScope -Names @($Name)
+    Assert-PantryPort -Port $Port
+    # Deleting a missing rule is allowed to fail. Adding the rule is not.
+    netsh advfirewall firewall delete rule name="$Name" | Out-Null
+    netsh advfirewall firewall add rule name="$Name" dir=in action=allow protocol=TCP localport=$Port | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to add firewall rule $Name." }
+}
+
+function Wait-PantryHealth {
+    param(
+        [int]$TimeoutSec = 90,
+        [int]$IntervalSec = 2,
+        [Parameter(Mandatory = $true)][scriptblock]$Probe
+    )
+    if ($TimeoutSec -lt 1) { throw 'Health timeout must be at least 1 second.' }
+    if ($IntervalSec -lt 0) { throw 'Health interval cannot be negative.' }
+    $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSec)
+    while ($true) {
+        if ((& $Probe)) { return $true }
+        if ([datetime]::UtcNow -ge $deadline) { return $false }
+        if ($IntervalSec -gt 0) { Start-Sleep -Seconds $IntervalSec }
+    }
+}
+
+function Get-PantryProtectedDirs {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+    $root = $InstallRoot.TrimEnd('\', '/')
+    $names = @('conf', 'backup', 'data\caddy', 'data\photos', 'logs')
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $names) {
+        if ($root -match '^[A-Za-z]:') {
+            [void]$out.Add($root + '\' + $name)
+        } else {
+            $child = $name -replace '\\', [System.IO.Path]::DirectorySeparatorChar
+            [void]$out.Add((Join-Path $root $child))
+        }
+    }
+    foreach ($dir in $out) { Write-Output $dir }
+}
+
+function Protect-PantryTree {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if ($env:OS -ne 'Windows_NT') { return }
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    Set-PantryConfAcl -Path $Path
+    Get-ChildItem -LiteralPath $Path -Force -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        Set-PantryConfAcl -Path $_.FullName
+    }
+}
+
+function Get-PantryBackupOffsiteReminder {
+    return 'Copy these backups to another disk or another machine. A backup that stays on this disk is lost with the disk.'
 }

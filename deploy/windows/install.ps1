@@ -121,8 +121,11 @@ Write-PantryUtf8NoBom -Path $envPath -Value $merged
 $caddyTemplate = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Caddyfile.template'))
 $caddyText = New-PantryCaddyfile -Template $caddyTemplate -PublicIp $PublicIp -PublicPort $PublicPort -ListenPort $ListenPort -AcmeEmail $AcmeEmail -WebRoot (Join-Path $InstallRoot 'web') -LogFile (Join-Path $InstallRoot 'logs\caddy.log') -AcmeHttpPort $AcmeHttpPort
 Write-PantryUtf8NoBom -Path (Join-Path $InstallRoot 'conf\Caddyfile') -Value $caddyText
-if ($env:OS -eq 'Windows_NT') {
-    Protect-PantryConf -ConfDir (Join-Path $InstallRoot 'conf')
+foreach ($privateDir in @(Get-PantryProtectedDirs -InstallRoot $InstallRoot)) {
+    if (-not (Test-Path -LiteralPath $privateDir)) {
+        New-Item -ItemType Directory -Force -Path $privateDir | Out-Null
+    }
+    Protect-PantryTree -Path $privateDir
 }
 
 $indexDest = Join-Path $InstallRoot 'web\index.html'
@@ -133,20 +136,15 @@ if (-not (Test-Path -LiteralPath $indexDest)) {
 function Install-PantryService {
     param([string]$Name, [string]$TemplateName)
     Assert-PantryScope -Names @($Name)
-    $winsw = Resolve-PantryOfflineFile -OfflineDir $OfflineDir -Explicit '' -Label 'WinSW.exe' -Match { $_.Name -eq 'WinSW.exe' }
-    $xml = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot $TemplateName))
-    $xml = $xml.Replace('__SERVICE_ID__', $Name).Replace('__INSTALL_ROOT__', $InstallRoot).Replace('__LISTEN_PORT__', "$ListenPort")
+    $winswSpec = Get-PantryWinSwSpec
+    $winsw = Resolve-PantryOfflineFile -OfflineDir $OfflineDir -Explicit '' -Label $winswSpec.FileName -Match { $_.Name -eq $winswSpec.FileName }
+    $template = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot $TemplateName))
+    $xml = Expand-PantryWinSwXml -Template $template -ServiceId $Name -InstallRoot $InstallRoot -ListenPort "$ListenPort"
     $target = Join-Path $InstallRoot "bin\$Name.xml"
     Write-PantryUtf8NoBom -Path $target -Value $xml
     $exe = Join-Path $InstallRoot "bin\$Name.exe"
     Copy-Item -LiteralPath $winsw -Destination $exe -Force
-    & $exe status
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "$Name is already installed; leaving the service registration in place."
-    } else {
-        & $exe install
-        if ($LASTEXITCODE -ne 0) { throw "$Name install failed." }
-    }
+    Invoke-PantryServiceInstall -Exe $exe -Name $Name
 }
 
 Install-PantryService -Name $serverService -TemplateName 'pantry-server.xml.template'
@@ -155,9 +153,7 @@ Install-PantryService -Name $caddyService -TemplateName 'pantry-caddy.xml.templa
 if (-not $SkipFirewall) {
     $rules = Get-PantryFirewallPlan -PublicRule $FirewallRuleName -PublicPort $PublicPort -AcmeRule $AcmeFirewallRuleName -AcmePort $AcmeHttpPort
     foreach ($rule in $rules) {
-        Assert-PantryScope -Names @($rule.Name)
-        netsh advfirewall firewall delete rule name="$($rule.Name)" | Out-Null
-        netsh advfirewall firewall add rule name="$($rule.Name)" dir=in action=allow protocol=TCP localport=$($rule.Port) | Out-Null
+        Add-PantryFirewallRule -Name $rule.Name -Port $rule.Port
     }
 }
 

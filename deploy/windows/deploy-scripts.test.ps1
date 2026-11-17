@@ -134,7 +134,7 @@ if ($install -match '(?m)(?i)^\s*(\.|\&).{0,120}register-backup-task') { throw '
 if ($install -notmatch 'Install-PantryJre') { throw 'install does not extract the JRE' }
 if ($install -notmatch 'pantry-server.jar') { throw 'install does not copy the jar' }
 if ($install -notmatch 'caddy.exe') { throw 'install does not copy caddy' }
-if ($install -notmatch 'Protect-PantryConf') { throw 'install does not lock the conf ACL' }
+if ($install -notmatch 'Protect-PantryTree') { throw 'install does not lock the private directories' }
 if ($install -notmatch 'pantry-caddy-acme-80') { throw 'install missing the port 80 rule' }
 if ($install -notmatch 'JRE 21') { throw 'install does not say JRE 21' }
 if ($install -match '(?i)(Set-Content|Add-Content|Out-File|WriteAllText)[^\r\n]*pg_hba') { throw 'install writes pg_hba' }
@@ -168,5 +168,154 @@ foreach ($xml in @($serverXml, $caddyXml)) {
     if ($xml -notmatch 'PANTRY_ENV_FILE') { throw 'winsw env file' }
     if ($xml -notmatch '__INSTALL_ROOT__\\conf\\server.env') { throw 'winsw server.env path' }
 }
+
+$onceText = "PANTRY_PROFILE=prod`r`nPANTRY_DB_PASSWORD=keep-this`r`nPANTRY_PHONE_ENC_KEY=filled-enc-key`r`n"
+$fillAgain = @(
+    @{ Key = 'PANTRY_PROFILE'; Value = 'prod' },
+    @{ Key = 'PANTRY_DB_PASSWORD'; Value = '' },
+    @{ Key = 'PANTRY_PHONE_ENC_KEY'; Value = '' },
+    @{ Key = 'PANTRY_DATA_DIR'; Value = 'C:\pantry\data\photos' }
+)
+$once = Merge-PantryEnvText -Existing $onceText -Fill $fillAgain
+$twice = Merge-PantryEnvText -Existing $once -Fill $fillAgain
+if ($twice -ne $once) { throw 'running the env merge twice changed the file' }
+foreach ($keyName in @('PANTRY_PROFILE', 'PANTRY_DB_PASSWORD', 'PANTRY_PHONE_ENC_KEY', 'PANTRY_DATA_DIR')) {
+    $count = 0
+    foreach ($envLine in @(Split-PantryEnvLines -Text $twice)) {
+        $trim = $envLine.Trim()
+        $eq = $trim.IndexOf('=')
+        if ($eq -gt 0 -and $trim.Substring(0, $eq).Trim() -eq $keyName) { $count++ }
+    }
+    if ($count -ne 1) { throw "key $keyName appears $count times" }
+}
+if ($twice -notmatch 'PANTRY_DB_PASSWORD=keep-this') { throw 'second merge cleared the password' }
+
+$spaced = Get-PantryBackupTaskArgument -ScriptPath 'C:\pantry\bin\backup.ps1' -InstallRoot 'C:\pantry\' -PostgresBin 'C:\Program Files\PostgreSQL\16\bin\' -Keep 14
+if ($spaced -match 'bin\\"') { throw 'a trailing backslash escapes the closing quote' }
+if ($spaced -notmatch '"C:\\Program Files\\PostgreSQL\\16\\bin"') { throw 'postgres path with spaces was not quoted' }
+if ($spaced -notmatch '-DatabaseName pantry -DatabaseUser pantry -Keep 14') { throw 'arguments after the postgres path were swallowed' }
+$plain = Get-PantryBackupTaskArgument -ScriptPath 'C:\pantry\bin\backup.ps1' -InstallRoot 'C:\pantry' -PostgresBin 'C:\pg\bin\' -Keep 14
+if ($plain -notmatch '-PostgresBin C:\\pg\\bin -DatabaseName') { throw 'trailing backslash was left on a path without spaces' }
+
+$winswSpec = Get-PantryWinSwSpec
+if ($winswSpec.Version -ne '2.12.0' -or $winswSpec.FileName -ne 'WinSW-x64.exe') { throw 'WinSW is not pinned to v2.12.0 x64' }
+if ($install -match '\$exe status') { throw 'install still trusts the WinSW status exit code' }
+if ($install -notmatch 'Invoke-PantryServiceInstall') { throw 'install does not use Get-Service to decide registration' }
+$work = Join-Path ([System.IO.Path]::GetTempPath()) ('pantry-winsw-' + [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Force -Path $work | Out-Null
+try {
+    $callLog = Join-Path $work 'calls.txt'
+    $fake = Join-Path $work 'WinSW-x64.exe'
+    $fakeBody = @"
+#!/bin/sh
+printf '%s\n' "`$*" >> '$callLog'
+if [ "`$1" = status ]; then
+  echo NonExistent
+  exit 0
+fi
+exit 0
+"@
+    [System.IO.File]::WriteAllText($fake, $fakeBody.Replace("`r`n", "`n"))
+    if (Get-Command chmod -ErrorAction SilentlyContinue) { & chmod +x $fake }
+    & $fake status | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'fake WinSW status should exit 0' }
+    Remove-Item -LiteralPath $callLog -Force
+    & {
+        function Get-Service { param($Name) return $null }
+        Invoke-PantryServiceInstall -Exe $fake -Name 'pantry-server'
+    }
+    $calls = [System.IO.File]::ReadAllText($callLog)
+    if ($calls -notmatch 'install') { throw 'NonExistent WinSW with exit 0 did not lead to install' }
+    Remove-Item -LiteralPath $callLog -Force
+    & {
+        function Get-Service { param($Name) return [pscustomobject]@{ Status = 'Stopped' } }
+        Invoke-PantryServiceInstall -Exe $fake -Name 'pantry-server'
+    }
+    if (Test-Path -LiteralPath $callLog) { throw 'install ran even though Get-Service found the service' }
+} finally {
+    if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
+}
+
+if ($status -notmatch 'Assert-PantryScope -Names \(@') { throw 'status.ps1 still passes + as a positional argument' }
+$certDef = $status.IndexOf('function Show-PantryCertificate')
+$certUse = $status.IndexOf('Show-PantryCertificate -Url')
+if ($certDef -lt 0 -or $certUse -lt 0 -or $certDef -gt $certUse) { throw 'certificate function is used before it is defined' }
+$statusRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('pantry-status-' + [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Force -Path $statusRoot | Out-Null
+try {
+    $statusOut = & {
+        function Get-Service { param($Name) return $null }
+        function Invoke-WebRequest { param($Uri, [switch]$UseBasicParsing, $TimeoutSec) throw 'down' }
+        & (Join-Path $PSScriptRoot 'status.ps1') -InstallRoot $statusRoot -ServicePrefix 'pantry' -PublicHealthUrl 'https://127.0.0.1:9/healthz' *>&1 | Out-String
+    }
+    if ($statusOut -notmatch 'pantry-server missing') { throw "status did not list the service: $statusOut" }
+    if ($statusOut -notmatch 'cert unreadable') { throw "status did not reach the certificate check: $statusOut" }
+    if ($statusOut -notmatch 'last backup none') { throw "status stopped before the backup line: $statusOut" }
+} finally {
+    if (Test-Path -LiteralPath $statusRoot) { Remove-Item -LiteralPath $statusRoot -Recurse -Force }
+}
+
+$upgrade = Read-Script 'upgrade.ps1'
+$stopAt = $upgrade.IndexOf('Stop-PantryOne')
+$backupAt = $upgrade.IndexOf('backup.ps1')
+$copyAt = $upgrade.IndexOf('Copy-Item -LiteralPath $NewJar')
+if ($stopAt -lt 0 -or $backupAt -lt $stopAt -or $copyAt -lt $backupAt) { throw 'upgrade must stop, then back up, then replace the jar' }
+if ($upgrade -notmatch 'HealthTimeoutSec = 90') { throw 'upgrade health timeout' }
+if ($upgrade -notmatch 'forward-only') { throw 'upgrade does not say migrations are forward-only' }
+$script:healthTries = 0
+$healthy = Wait-PantryHealth -TimeoutSec 5 -IntervalSec 0 -Probe {
+    $script:healthTries++
+    return ($script:healthTries -ge 3)
+}
+if (-not $healthy) { throw 'health wait should succeed after retries' }
+$gaveUp = Wait-PantryHealth -TimeoutSec 1 -IntervalSec 0 -Probe { return $false }
+if ($gaveUp) { throw 'health wait should fail when the probe never succeeds' }
+
+$protected = @(Get-PantryProtectedDirs -InstallRoot 'C:\pantry')
+if ($protected.Count -ne 5) { throw "expected 5 protected directories, got $($protected.Count)" }
+$protectedText = $protected -join "`n"
+foreach ($part in @('\conf', '\backup', '\data\caddy', '\data\photos', '\logs')) {
+    if ($protectedText -notmatch [regex]::Escape($part)) { throw "protected dirs missing $part" }
+}
+if ($install -notmatch 'Protect-PantryTree') { throw 'install does not tighten the private directories' }
+
+if ($backup -notmatch 'pantry-env-') { throw 'backup does not copy server.env' }
+if ($backup -notmatch 'Set-PantryConfAcl') { throw 'backup does not tighten the ACL on new backup files' }
+if ($backup -notmatch 'Get-PantryBackupOffsiteReminder') { throw 'backup does not tell the operator to copy files off this disk' }
+$envWork = Join-Path ([System.IO.Path]::GetTempPath()) ('pantry-envcopy-' + [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Force -Path $envWork | Out-Null
+try {
+    $envSrc = Join-Path $envWork 'server.env'
+    $envDst = Join-Path $envWork 'pantry-env-stamp.env'
+    [System.IO.File]::WriteAllText($envSrc, "PANTRY_DB_PASSWORD=placeholder-not-a-secret`r`n")
+    Copy-Item -LiteralPath $envSrc -Destination $envDst -Force
+    $copied = [System.IO.File]::ReadAllText($envDst)
+    if ($copied -notmatch 'placeholder-not-a-secret') { throw 'env backup copy dropped the file' }
+} finally {
+    if (Test-Path -LiteralPath $envWork) { Remove-Item -LiteralPath $envWork -Recurse -Force }
+}
+
+$xmlOut = Expand-PantryWinSwXml -Template $serverXml -ServiceId 'pantry-server' -InstallRoot 'C:\pantry & co' -ListenPort '18280'
+if ($xmlOut -notmatch '&amp;') { throw 'WinSW xml did not escape the install path' }
+if ($xmlOut -match 'pantry & co') { throw 'WinSW xml kept a raw ampersand' }
+if ($xmlOut -notmatch '"C:\\pantry &amp; co\\bin\\pantry-server.jar"') { throw 'jar path is not quoted' }
+if ($caddyXml -notmatch '"__INSTALL_ROOT__\\conf\\Caddyfile"') { throw 'caddy config path is not quoted' }
+$commonText = Read-Script 'common.ps1'
+if ($commonText -notmatch 'Failed to add firewall rule') { throw 'firewall add does not check the exit code' }
+
+$verifier = New-PantryScramVerifier -Password 'placeholder-not-printed'
+if ($verifier -notmatch '^SCRAM-SHA-256\$4096:') { throw 'SCRAM verifier format' }
+if ($verifier.Contains('placeholder-not-printed')) { throw 'SCRAM verifier contains the password' }
+if ($init -notmatch 'New-PantryScramVerifier') { throw 'init-db sends the plaintext password to psql' }
+$scramPlan = Get-PantryPsqlPlan -AdminUser 'postgres' -DatabaseUser 'pantry' -DatabaseName 'pantry' -RolePassword $verifier
+if ($scramPlan.Stdin -notmatch "SET log_statement = 'none'") { throw 'psql session does not disable statement logging' }
+if ($scramPlan.Stdin.Contains('placeholder-not-printed')) { throw 'plaintext password is in the psql script' }
+
+$purge = Read-Script 'purge.ps1'
+if ($purge -notmatch 'PANTRY_ENV_FILE') { throw 'purge does not point the jar at server.env' }
+$uninstall = Read-Script 'uninstall.ps1'
+if ($uninstall -notmatch 'ConfirmDropDatabase') { throw 'drop database has no explicit confirmation' }
+if ($uninstall -notmatch 'backup.ps1') { throw 'drop database does not take a backup first' }
+if ($uninstall -notmatch 'uninstall failed') { throw 'WinSW uninstall exit code is ignored' }
 
 Write-Host 'deploy-scripts.test.ps1 ok'

@@ -9,16 +9,18 @@
 `install.ps1` 默认安装到 `C:\pantry`。它会：
 
 1. 把 Temurin 21 JRE 的 zip 解压到 `<安装目录>\jre`（里面要有 `bin\java.exe`），并把 `caddy.exe`、`pantry-server.jar` 复制到 `<安装目录>\bin`。
-2. 创建或补全 `<安装目录>\conf\server.env`。已有且非空的键不覆盖。缺的 `PANTRY_DB_PASSWORD`、`PANTRY_PHONE_ENC_KEY`、`PANTRY_PHONE_HMAC_KEY` 用 CSPRNG 生成，脚本不打印这些值。`conf` 目录的 ACL 只留给 Administrators 和 SYSTEM。
+2. 创建或补全 `<安装目录>\conf\server.env`。已有且非空的键不覆盖，用 5.1 或 pwsh 7 重跑都不会再追加一份键。缺的 `PANTRY_DB_PASSWORD`、`PANTRY_PHONE_ENC_KEY`、`PANTRY_PHONE_HMAC_KEY` 用 CSPRNG 生成，脚本不打印这些值。
 3. 写 Caddyfile。`-AcmeEmail` 为空时，文件里不出现 `email` 行，空值会让 Caddy 起不来。
 4. 若 `web\index.html` 还不存在，放入一份占位页，这样 `/` 返回 200。操作者删掉占位页后，Caddy 对没有的文件返回 404。
 5. 把 `PANTRY_DATA_DIR` 设为 `<安装目录>\data\photos`（键已存在且非空则不改）。照片备份只打这个目录，不包含 Caddy 的 `data\caddy`，也不包含私钥。
-6. 安装 WinSW 服务 `pantry-server`、`pantry-caddy`。日志目录是 `<安装目录>\logs`，启动类型 Automatic，失败后 10 秒重启。`PANTRY_ENV_FILE` 指向 `conf\server.env`。
-7. 增加两条防火墙规则：`pantry-caddy-9443`（TCP 9443）和 `pantry-caddy-acme-80`（TCP 80）。`-SkipFirewall` 则两条都不加。
+6. 安装 WinSW **v2.12.0** 的 `WinSW-x64.exe`（[发布页](https://github.com/winsw/winsw/releases/tag/v2.12.0)）。该发布没有附带 SHA256，脚本不内置校验和，也不要自己编一个写进仓库。是否已注册看 `Get-Service`，不看 `WinSW status` 的退出码（v2 在未安装时也返回 0）。服务以 LocalSystem 运行。日志目录是 `<安装目录>\logs`，启动类型 Automatic，失败后 10 秒重启。`PANTRY_ENV_FILE` 指向 `conf\server.env`。参数里的路径加了引号，代入值会做 XML 转义。
+7. 增加两条防火墙规则：`pantry-caddy-9443`（TCP 9443）和 `pantry-caddy-acme-80`（TCP 80）。添加失败（`netsh` 退出码非 0）时安装停止。`-SkipFirewall` 则两条都不加。80 端口如果已被别的程序占用，安装前的端口检查会拒绝继续。
 
 安装**不会**建数据库角色，**不会**注册备份计划任务。
 
-离线目录 `-OfflineDir` 里放：`WinSW.exe`、Temurin 21 JRE 的 zip、`caddy.exe`、`pantry-server.jar`。也可以用 `-JreZip`、`-CaddyExe`、`-ServerJar` 单独指定。`-PublicIp` 只在安装时写入 Caddyfile，不进仓库。
+离线目录 `-OfflineDir` 里放：`WinSW-x64.exe`（只要 v2.12.0）、Temurin 21 JRE 的 zip、`caddy.exe`、`pantry-server.jar`。也可以用 `-JreZip`、`-CaddyExe`、`-ServerJar` 单独指定。`-PublicIp` 只在安装时写入 Caddyfile，不进仓库。
+
+安装结束会收紧这些目录的 ACL，只留 Administrators 和 SYSTEM，并去掉继承：`conf`、`backup`、`data\caddy`、`data\photos`、`logs`。服务账号是 LocalSystem，也就是 SYSTEM，所以 pantry-server 和 pantry-caddy 仍能读写。本机其他用户读不到 dump、照片、Caddy 私钥和日志。
 
 JDK 21 用来在构建机打 fat jar。服务器进程用的是上面这份 JRE 21。
 
@@ -26,7 +28,7 @@ JDK 21 用来在构建机打 fat jar。服务器进程用的是上面这份 JRE 
 
 角色和库要另做，二选一。
 
-`init-db.ps1` 会交互询问 PostgreSQL 超级用户口令（不回显），再从 `server.env` 读取 `PANTRY_DB_PASSWORD`，经 psql 的 `\getenv` 传给角色，不放进命令行，也不打印。它不改 `pg_hba.conf`，不重启 PostgreSQL。`-ResetPantryPassword` 才会改已存在角色的口令。
+`init-db.ps1` 会交互询问 PostgreSQL 超级用户口令（不回显），再从 `server.env` 读取 `PANTRY_DB_PASSWORD`。发给 PostgreSQL 的是客户端算出的 SCRAM-SHA-256 验证串，不是明文；会话里还会 `SET log_statement = 'none'`。口令不放进命令行，也不打印。它不改 `pg_hba.conf`，不重启 PostgreSQL。`-ResetPantryPassword` 才会改已存在角色的口令。手工执行下面的 SQL 时，明文仍可能进 PostgreSQL 日志，所以优先用脚本。
 
 或者由操作者用超级用户在维护窗口执行下面的 SQL。`<password>` 换成 `server.env` 里的 `PANTRY_DB_PASSWORD`，不要把口令写进仓库或聊天记录：
 
@@ -113,9 +115,23 @@ Release 构建从环境变量 `PANTRY_CA_PINS` 或本机 `local.properties` 注�
 
 ## 备份
 
-`backup.ps1` 以角色 `pantry` 对 `pantry` 库做 `pg_dump`。口令从 `server.env` 的 `PANTRY_DB_PASSWORD` 读入 `PGPASSWORD`，dump 结束后清掉，不打印。同时把 `<安装目录>\data\photos` 打成 zip。两份文件都写到 `<安装目录>\backup`，文件名带时间戳。`-Keep` 默认 14，dump 和照片 zip 各自保留最近 14 份。
+`backup.ps1` 以角色 `pantry` 对 `pantry` 库做 `pg_dump`。口令从 `server.env` 的 `PANTRY_DB_PASSWORD` 读入 `PGPASSWORD`，dump 结束后清掉，不打印。同时把 `<安装目录>\data\photos` 打成 zip，并复制一份 `server.env`（里面有手机号密钥）。三份文件都写到 `<安装目录>\backup`，文件名带时间戳。`-Keep` 默认 14，dump、照片 zip 和 env 副本各自保留最近 14 份。新文件和 `backup` 目录的 ACL 与 `conf` 相同，只有 Administrators 和 SYSTEM。
 
-`register-backup-task.ps1` 注册每日计划任务 `pantry-backup`，`-At` 默认 `02:00`，以 SYSTEM 运行。它**不会**被 `install.ps1` 调用。`unregister-backup-task.ps1` 只删除这个任务。
+脚本结束时会提示：把这些备份拷到另一块磁盘或另一台机器。只留在本机系统盘上，磁盘坏了就一起没了。
+
+`register-backup-task.ps1` 注册每日计划任务 `pantry-backup`，`-At` 默认 `02:00`，以 SYSTEM 运行。`-PostgresBin` 末尾的 `\` 会被去掉，带空格的路径按 Windows 命令行规则加引号。它**不会**被 `install.ps1` 调用。`unregister-backup-task.ps1` 只删除这个任务。
+
+## 恢复
+
+在一台新机器上，先装好 PostgreSQL 16、JRE 21 和同一份 pantry 服务（不要把旧的私钥目录混进来），然后：
+
+1. 把备份里的 `pantry-env-*.env` 拷回 `<安装目录>\conf\server.env`。这是登录密钥，没有它，库里的手机号密文对不上。
+2. 用超级用户建好 `pantry` 角色和空库（见上面的 SQL，口令用这份 `server.env` 里的 `PANTRY_DB_PASSWORD`），再恢复 dump：`pg_restore -h 127.0.0.1 -U pantry -d pantry --no-owner --role=pantry <备份>.dump`。
+3. 把照片 zip 解压到 `<安装目录>\data\photos`，目录结构要和原来一致。
+4. 启动 `pantry-server` 和 `pantry-caddy`。
+5. 用 `server.env` 里的测试码和白名单登录一次，并打开一张已有照片，确认账号和文件都在。
+
+Flyway 迁移只向前。升级失败如果已经执行了新的迁移，不能只换回旧 jar，要从这次升级前的 dump 恢复数据库。
 
 ## 状态
 
@@ -123,9 +139,24 @@ Release 构建从环境变量 `PANTRY_CA_PINS` 或本机 `local.properties` 注�
 
 ## 升级和卸载
 
-`upgrade.ps1` 只替换并重启 `pantry-server`。健康检查失败时把上一个 jar 拷回去再启动，检查的仍是 pantry 端口。不重启 PostgreSQL。
+`upgrade.ps1` 先停 `pantry-server`，调用 `backup.ps1` 做升级前备份，再换 jar 并启动。`healthz` 会重试，直到成功或超过 `-HealthTimeoutSec`（默认 90 秒）。失败时把上一个 jar 拷回去再启动。Flyway 迁移只向前：如果新 jar 已经执行了迁移，旧 jar 可能起不来，这时要用升级前的 dump 恢复数据库。不重启 PostgreSQL。
 
-`uninstall.ps1` 只停止并卸载 `pantry-server` 和 `pantry-caddy`，并删除 `pantry-caddy-9443`、`pantry-caddy-acme-80` 和计划任务 `pantry-backup`、`pantry-purge`。`-DropDatabase` 才会删除参数里的那个库，名字必须通过 pantry 范围检查。
+`uninstall.ps1` 只停止并卸载 `pantry-server` 和 `pantry-caddy`，并检查 WinSW `uninstall` 的退出码。同时删除 `pantry-caddy-9443`、`pantry-caddy-acme-80` 和计划任务 `pantry-backup`、`pantry-purge`。`-DropDatabase` 还必须带 `-ConfirmDropDatabase`，并且会先跑一次 `backup.ps1`。删的库名必须通过 pantry 范围检查。
+
+`purge.ps1` 会把 `PANTRY_ENV_FILE` 指到 `conf\server.env` 再执行 jar 的 `purge`。
+
+## 已知问题
+
+- P2-14：非精确窗口闹钟可能越过午夜。提醒时间设在 23:59 时，过了零点发出的会是次日汇总，并把次日标成已发。
+- P2-16：安装 JRE 时先删掉目标目录再移动。装到另一块盘时，跨卷移动失败会把原来的 JRE 留空。
+- P2-17：服务正在运行时重跑 install 会因端口占用而拒绝。停掉服务后再跑，会覆盖已有的 WinSW 程序。重跑前先停 pantry 服务。
+- P2-20：调用 psql 时先读完标准输出再读标准错误，错误输出很大时可能堵住。
+- P2-22：角色已经存在且没有 `-ResetPantryPassword` 时，init-db 不会再试登录，发现不了 server.env 口令和库里不一致。
+- P2-23：照片 zip 在 dump 之后、服务仍在跑的时候打包，两者可能对不上；zip 失败时 dump 已经写好，清理可能不会接着做。
+- P2-24：备份失败只留在计划任务历史里。status 只看最近文件的时间，不看这次备份是否成功。
+- P2-27：`install-secrets.test.ps1` 含中文且没有 BOM，Windows PowerShell 5.1 可能按系统 ANSI 代码页来读；测试用的临时目录不一定会删掉。
+- P2-29：服务端读 server.env 时不会去掉 UTF-8 BOM。用会加 BOM 的编辑器保存后，第一个键会失效。
+- P2-31：通知被永久拒绝后，每次保存提醒时间都会直接打开应用详情页，没有先说明一句，用的也不是通知设置页。
 
 ## fat jar 自测
 

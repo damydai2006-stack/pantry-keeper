@@ -1,43 +1,67 @@
-# Replace pantry-server.jar and roll back that jar only. Does not restart PostgreSQL or ptt services.
+# Stop pantry-server, back up, then replace the jar. Roll back the jar only.
+# Flyway migrations are forward-only. Does not restart PostgreSQL or ptt services.
 param(
     [string]$InstallRoot = 'C:\pantry',
     [string]$ServicePrefix = 'pantry',
     [int]$ListenPort = 18280,
+    [string]$DatabaseName = 'pantry',
+    [string]$DatabaseUser = 'pantry',
+    [string]$PostgresBin = '',
+    [int]$Keep = 14,
+    [int]$HealthTimeoutSec = 90,
+    [int]$HealthIntervalSec = 2,
     [Parameter(Mandatory = $true)][string]$NewJar
 )
 
 . "$PSScriptRoot\common.ps1"
 $service = "$ServicePrefix-server"
-Assert-PantryScope -Names @($InstallRoot, $ServicePrefix, $service)
+Assert-PantryScope -Names @($InstallRoot, $ServicePrefix, $service, $DatabaseName, $DatabaseUser)
+Assert-SafeIdent -Name $DatabaseName
+Assert-SafeIdent -Name $DatabaseUser
 Assert-PantryPort -Port $ListenPort
-if (-not (Test-Path $NewJar)) { throw "New jar not found: $NewJar" }
+if (-not (Test-Path -LiteralPath $NewJar)) { throw "New jar not found: $NewJar" }
+if ([string]::IsNullOrWhiteSpace($PostgresBin)) {
+    throw 'Pass -PostgresBin so the upgrade can take a backup before replacing the jar.'
+}
+$PostgresBin = Trim-PantryPath -Path $PostgresBin
 
 $current = Join-Path $InstallRoot 'bin\pantry-server.jar'
 $previous = Join-Path $InstallRoot 'bin\pantry-server.jar.prev'
-if (Test-Path $current) { Copy-Item $current $previous -Force }
-Copy-Item $NewJar $current -Force
 
-function Restart-PantryService {
+function Stop-PantryOne {
     param([string]$Name)
     Assert-PantryScope -Names @($Name)
-    Restart-Service -Name $Name
+    if (Test-PantryWindowsService -Name $Name) { Stop-Service -Name $Name -Force }
 }
 
-function Test-PantryHealth {
+function Start-PantryOne {
+    param([string]$Name)
+    Assert-PantryScope -Names @($Name)
+    if (-not (Test-PantryWindowsService -Name $Name)) { throw "$Name is not registered." }
+    Start-Service -Name $Name
+}
+
+Stop-PantryOne -Name $service
+& (Join-Path $PSScriptRoot 'backup.ps1') -InstallRoot $InstallRoot -DatabaseName $DatabaseName -DatabaseUser $DatabaseUser -PostgresBin $PostgresBin -Keep $Keep
+if ($LASTEXITCODE -ne 0) { throw 'Pre-upgrade backup failed. The jar was not replaced.' }
+
+if (Test-Path -LiteralPath $current) { Copy-Item -LiteralPath $current -Destination $previous -Force }
+Copy-Item -LiteralPath $NewJar -Destination $current -Force
+Start-PantryOne -Name $service
+
+$healthy = Wait-PantryHealth -TimeoutSec $HealthTimeoutSec -IntervalSec $HealthIntervalSec -Probe {
     $url = "http://127.0.0.1:$ListenPort/healthz"
     try {
-        $res = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 20
-        return $res.StatusCode -eq 200
+        $res = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5
+        return ($res.StatusCode -eq 200)
     } catch {
         return $false
     }
 }
-
-Restart-PantryService -Name $service
-Start-Sleep -Seconds 3
-if (-not (Test-PantryHealth)) {
-    if (Test-Path $previous) { Copy-Item $previous $current -Force }
-    Restart-PantryService -Name $service
-    throw 'Upgrade failed health check. Rolled back pantry-server.jar. PostgreSQL was not restarted.'
+if (-not $healthy) {
+    Stop-PantryOne -Name $service
+    if (Test-Path -LiteralPath $previous) { Copy-Item -LiteralPath $previous -Destination $current -Force }
+    Start-PantryOne -Name $service
+    throw 'Upgrade failed the health check and rolled back pantry-server.jar. Flyway migrations are forward-only. If the new jar already applied a migration, the previous jar may not start; restore the database from the pre-upgrade dump. PostgreSQL was not restarted.'
 }
-Write-Host "Upgraded $service. Health check on 127.0.0.1:$ListenPort passed."
+Write-Host "Upgraded $service. Health check on 127.0.0.1:$ListenPort passed within $HealthTimeoutSec seconds."

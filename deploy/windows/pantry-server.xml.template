@@ -3,7 +3,7 @@
   <name>__SERVICE_ID__</name>
   <description>Pantry Keeper API</description>
   <executable>__INSTALL_ROOT__\jre\bin\java.exe</executable>
-  <arguments>-Xmx256m -jar __INSTALL_ROOT__\bin\pantry-server.jar</arguments>
+  <arguments>-Xmx256m -jar "__INSTALL_ROOT__\bin\pantry-server.jar"</arguments>
   <workingdirectory>__INSTALL_ROOT__</workingdirectory>
   <priority>BelowNormal</priority>
   <startmode>Automatic</startmode>

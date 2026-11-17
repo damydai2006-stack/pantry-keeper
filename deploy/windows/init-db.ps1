@@ -32,8 +32,9 @@ $admin = $null
 try {
     $admin = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
     if ([string]::IsNullOrEmpty($admin)) { throw 'Superuser password was empty.' }
+    $verifier = New-PantryScramVerifier -Password $rolePassword
     Invoke-PantryPsql -PsqlPath $psql -AdminUser $PostgresAdminUser -AdminPassword $admin `
-        -DatabaseUser $DatabaseUser -DatabaseName $DatabaseName -RolePassword $rolePassword `
+        -DatabaseUser $DatabaseUser -DatabaseName $DatabaseName -RolePassword $verifier `
         -ResetPassword ([bool]$ResetPantryPassword) | Out-Null
 } finally {
     if ($ptr -ne [IntPtr]::Zero) {
@@ -41,6 +42,7 @@ try {
     }
     $admin = $null
     $rolePassword = $null
+    $verifier = $null
 }
 
 Write-Host "pantry role and database are ready. PostgreSQL was not restarted. Passwords were not printed."

@@ -60,6 +60,17 @@ function Remove-PantryOldBackups {
     }
 }
 
+$envCopy = Join-Path $destDir ("pantry-env-{0}.env" -f $stamp)
+Copy-Item -LiteralPath $envPath -Destination $envCopy -Force
+if ($env:OS -eq 'Windows_NT') {
+    Set-PantryConfAcl -Path $dest
+    Set-PantryConfAcl -Path $photoZip
+    Set-PantryConfAcl -Path $envCopy
+    Protect-PantryTree -Path $destDir
+}
+
 Remove-PantryOldBackups -Directory $destDir -Filter 'pantry-*.dump' -Retain $Keep
 Remove-PantryOldBackups -Directory $destDir -Filter 'pantry-photos-*.zip' -Retain $Keep
-Write-Host "Wrote $dest and $photoZip"
+Remove-PantryOldBackups -Directory $destDir -Filter 'pantry-env-*.env' -Retain $Keep
+Write-Host "Wrote $dest, $photoZip, and $envCopy"
+Write-Host (Get-PantryBackupOffsiteReminder)
