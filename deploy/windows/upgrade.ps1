@@ -1,5 +1,6 @@
 # Stop pantry-server, back up, then replace the jar. Roll back the jar only.
-# Flyway migrations are forward-only. Does not restart PostgreSQL or ptt services.
+# Flyway migrations are forward-only. A failed backup restarts the old jar.
+# Does not restart PostgreSQL or ptt services.
 param(
     [string]$InstallRoot = 'C:\pantry',
     [string]$ServicePrefix = 'pantry',
@@ -26,7 +27,7 @@ if ([string]::IsNullOrWhiteSpace($PostgresBin)) {
 $PostgresBin = Trim-PantryPath -Path $PostgresBin
 
 $current = Join-Path $InstallRoot 'bin\pantry-server.jar'
-$previous = Join-Path $InstallRoot 'bin\pantry-server.jar.prev'
+$prevDir = Join-Path $InstallRoot 'bin'
 
 function Stop-PantryOne {
     param([string]$Name)
@@ -41,27 +42,22 @@ function Start-PantryOne {
     Start-Service -Name $Name
 }
 
-Stop-PantryOne -Name $service
-& (Join-Path $PSScriptRoot 'backup.ps1') -InstallRoot $InstallRoot -DatabaseName $DatabaseName -DatabaseUser $DatabaseUser -PostgresBin $PostgresBin -Keep $Keep
-if ($LASTEXITCODE -ne 0) { throw 'Pre-upgrade backup failed. The jar was not replaced.' }
-
-if (Test-Path -LiteralPath $current) { Copy-Item -LiteralPath $current -Destination $previous -Force }
-Copy-Item -LiteralPath $NewJar -Destination $current -Force
-Start-PantryOne -Name $service
-
-$healthy = Wait-PantryHealth -TimeoutSec $HealthTimeoutSec -IntervalSec $HealthIntervalSec -Probe {
-    $url = "http://127.0.0.1:$ListenPort/healthz"
-    try {
-        $res = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5
-        return ($res.StatusCode -eq 200)
-    } catch {
-        return $false
+$result = Invoke-PantryUpgrade -CurrentJar $current -NewJar $NewJar -PrevDirectory $prevDir `
+    -Stop { Stop-PantryOne -Name $service } `
+    -Start { Start-PantryOne -Name $service } `
+    -Backup {
+        & (Join-Path $PSScriptRoot 'backup.ps1') -InstallRoot $InstallRoot -DatabaseName $DatabaseName -DatabaseUser $DatabaseUser -PostgresBin $PostgresBin -Keep $Keep
+    } `
+    -Health {
+        Wait-PantryHealth -TimeoutSec $HealthTimeoutSec -IntervalSec $HealthIntervalSec -Probe {
+            $url = "http://127.0.0.1:$ListenPort/healthz"
+            try {
+                $res = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5
+                return ($res.StatusCode -eq 200)
+            } catch {
+                return $false
+            }
+        }
     }
-}
-if (-not $healthy) {
-    Stop-PantryOne -Name $service
-    if (Test-Path -LiteralPath $previous) { Copy-Item -LiteralPath $previous -Destination $current -Force }
-    Start-PantryOne -Name $service
-    throw 'Upgrade failed the health check and rolled back pantry-server.jar. Flyway migrations are forward-only. If the new jar already applied a migration, the previous jar may not start; restore the database from the pre-upgrade dump. PostgreSQL was not restarted.'
-}
+if ($result -eq 'skipped') { return }
 Write-Host "Upgraded $service. Health check on 127.0.0.1:$ListenPort passed within $HealthTimeoutSec seconds."

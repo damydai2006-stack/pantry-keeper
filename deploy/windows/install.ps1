@@ -121,12 +121,6 @@ Write-PantryUtf8NoBom -Path $envPath -Value $merged
 $caddyTemplate = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Caddyfile.template'))
 $caddyText = New-PantryCaddyfile -Template $caddyTemplate -PublicIp $PublicIp -PublicPort $PublicPort -ListenPort $ListenPort -AcmeEmail $AcmeEmail -WebRoot (Join-Path $InstallRoot 'web') -LogFile (Join-Path $InstallRoot 'logs\caddy.log') -AcmeHttpPort $AcmeHttpPort
 Write-PantryUtf8NoBom -Path (Join-Path $InstallRoot 'conf\Caddyfile') -Value $caddyText
-foreach ($privateDir in @(Get-PantryProtectedDirs -InstallRoot $InstallRoot)) {
-    if (-not (Test-Path -LiteralPath $privateDir)) {
-        New-Item -ItemType Directory -Force -Path $privateDir | Out-Null
-    }
-    Protect-PantryTree -Path $privateDir
-}
 
 $indexDest = Join-Path $InstallRoot 'web\index.html'
 if (-not (Test-Path -LiteralPath $indexDest)) {
@@ -157,8 +151,18 @@ if (-not $SkipFirewall) {
     }
 }
 
+# Lock the tree only after every binary and config file is in place.
+# Administrators keep full control, so a later install can still write.
+# LocalSystem is SYSTEM, so the services can still read and write.
+foreach ($privateDir in @(Get-PantryProtectedDirs -InstallRoot $InstallRoot)) {
+    if (-not (Test-Path -LiteralPath $privateDir)) {
+        New-Item -ItemType Directory -Force -Path $privateDir | Out-Null
+    }
+}
+Protect-PantryTree -Path $InstallRoot
+
 Write-Host "Installed $serverService and $caddyService under $InstallRoot."
 Write-Host 'JDK/JRE 21. Photos are in data\photos (PANTRY_DATA_DIR). Secrets were written to conf\server.env and were not printed.'
 Write-Host 'Database role creation is a separate step: run init-db.ps1, or apply the manual SQL in DEPLOY.md. PostgreSQL was not restarted.'
-Write-Host 'The backup scheduled task is not registered by install. Run register-backup-task.ps1 yourself after the database exists.'
+Write-Host 'pantry-backup and pantry-purge are not registered by install. Run register-backup-task.ps1 yourself after the database exists.'
 Write-Host 'AUTH_MODE stays disabled until an operator sets AUTH_MODE=test, a 6-digit AUTH_TEST_CODE, and AUTH_TEST_PHONES, then restarts pantry-server.'

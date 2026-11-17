@@ -256,10 +256,8 @@ try {
 }
 
 $upgrade = Read-Script 'upgrade.ps1'
-$stopAt = $upgrade.IndexOf('Stop-PantryOne')
-$backupAt = $upgrade.IndexOf('backup.ps1')
-$copyAt = $upgrade.IndexOf('Copy-Item -LiteralPath $NewJar')
-if ($stopAt -lt 0 -or $backupAt -lt $stopAt -or $copyAt -lt $backupAt) { throw 'upgrade must stop, then back up, then replace the jar' }
+if ($upgrade -match 'LASTEXITCODE') { throw 'upgrade still treats LASTEXITCODE after backup.ps1 as the result' }
+if ($upgrade -notmatch 'Invoke-PantryUpgrade') { throw 'upgrade does not use the guarded upgrade helper' }
 if ($upgrade -notmatch 'HealthTimeoutSec = 90') { throw 'upgrade health timeout' }
 if ($upgrade -notmatch 'forward-only') { throw 'upgrade does not say migrations are forward-only' }
 $script:healthTries = 0
@@ -272,9 +270,10 @@ $gaveUp = Wait-PantryHealth -TimeoutSec 1 -IntervalSec 0 -Probe { return $false 
 if ($gaveUp) { throw 'health wait should fail when the probe never succeeds' }
 
 $protected = @(Get-PantryProtectedDirs -InstallRoot 'C:\pantry')
-if ($protected.Count -ne 5) { throw "expected 5 protected directories, got $($protected.Count)" }
+if ($protected.Count -ne 9) { throw "expected 9 protected directories, got $($protected.Count)" }
+if ($protected -notcontains 'C:\pantry') { throw 'install root is not in the protected list' }
 $protectedText = $protected -join "`n"
-foreach ($part in @('\conf', '\backup', '\data\caddy', '\data\photos', '\logs')) {
+foreach ($part in @('\bin', '\jre', '\web', '\conf', '\backup', '\data\caddy', '\data\photos', '\logs')) {
     if ($protectedText -notmatch [regex]::Escape($part)) { throw "protected dirs missing $part" }
 }
 if ($install -notmatch 'Protect-PantryTree') { throw 'install does not tighten the private directories' }
@@ -317,5 +316,94 @@ $uninstall = Read-Script 'uninstall.ps1'
 if ($uninstall -notmatch 'ConfirmDropDatabase') { throw 'drop database has no explicit confirmation' }
 if ($uninstall -notmatch 'backup.ps1') { throw 'drop database does not take a backup first' }
 if ($uninstall -notmatch 'uninstall failed') { throw 'WinSW uninstall exit code is ignored' }
+
+$stampA = New-PantryBackupStamp
+$stampB = New-PantryBackupStamp
+if ($stampA -eq $stampB) { throw 'backup stamps collided' }
+if ($stampA -notmatch '^\d{8}-\d{9}-[0-9a-f]{8}$') { throw 'backup stamp shape' }
+$keptNames = @(
+    "pantry-$stampB.dump",
+    'pantry-20261116-020000000-bbbbbbbb.dump',
+    'pantry-20261115-020000000-cccccccc.dump'
+)
+$expired = @(Get-PantryExpiredBackupNames -Names $keptNames -Keep 2)
+if ("$($expired[0])" -notmatch '20261115-020000000-cccccccc') { throw 'retention did not keep the newest stamped backups' }
+$partialDir = Join-Path ([System.IO.Path]::GetTempPath()) ('pantry-partial-' + [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Force -Path $partialDir | Out-Null
+try {
+    $partials = @(
+        (Join-Path $partialDir 'pantry-partial.dump'),
+        (Join-Path $partialDir 'pantry-photos-partial.zip'),
+        (Join-Path $partialDir 'pantry-env-partial.env')
+    )
+    foreach ($partial in $partials) { [System.IO.File]::WriteAllText($partial, 'partial') }
+    Clear-PantryPartialBackup -Paths $partials
+    foreach ($partial in $partials) {
+        if (Test-Path -LiteralPath $partial) { throw 'partial backup file was left behind' }
+    }
+} finally {
+    if (Test-Path -LiteralPath $partialDir) { Remove-Item -LiteralPath $partialDir -Recurse -Force }
+}
+if ($backup -notmatch 'Clear-PantryPartialBackup') { throw 'backup does not delete partial files' }
+
+$upgradeWork = Join-Path ([System.IO.Path]::GetTempPath()) ('pantry-upgrade-' + [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Force -Path $upgradeWork | Out-Null
+try {
+    $currentJar = Join-Path $upgradeWork 'pantry-server.jar'
+    $newJar = Join-Path $upgradeWork 'incoming.jar'
+    [System.IO.File]::WriteAllText($currentJar, 'old-jar')
+    [System.IO.File]::WriteAllText($newJar, 'new-jar')
+    $script:upgradeStarts = 0
+    $failed = $false
+    try {
+        Invoke-PantryUpgrade -CurrentJar $currentJar -NewJar $newJar -PrevDirectory $upgradeWork `
+            -Stop { } -Start { $script:upgradeStarts++ } -Backup { throw 'pg_dump failed' } -Health { return $true }
+    } catch {
+        $failed = $true
+        if ($_.Exception.Message -notmatch 'aborted because the backup failed') { throw }
+        if ($_.Exception.Message -notmatch 'restarted on the old version') { throw }
+    }
+    if (-not $failed) { throw 'a failed backup did not abort the upgrade' }
+    if ([System.IO.File]::ReadAllText($currentJar) -ne 'old-jar') { throw 'failed backup modified the jar' }
+    if ($script:upgradeStarts -lt 1) { throw 'failed backup did not restart the service' }
+
+    [System.IO.File]::WriteAllText($newJar, 'old-jar')
+    $prevBefore = @(Get-ChildItem -LiteralPath $upgradeWork -Filter 'pantry-server.jar.prev-*')
+    $skipped = Invoke-PantryUpgrade -CurrentJar $currentJar -NewJar $newJar -PrevDirectory $upgradeWork `
+        -Stop { } -Start { $script:upgradeStarts++ } -Backup { } -Health { return $true }
+    if ($skipped -ne 'skipped') { throw 'identical jar was not skipped' }
+    $prevAfter = @(Get-ChildItem -LiteralPath $upgradeWork -Filter 'pantry-server.jar.prev-*')
+    if ($prevAfter.Count -ne $prevBefore.Count) { throw 'identical jar overwrote the previous jar' }
+
+    [System.IO.File]::WriteAllText($newJar, 'replacement-jar')
+    $script:upgradeStartPhase = 'fail'
+    $startsBeforeRollback = $script:upgradeStarts
+    $rolled = $false
+    try {
+        Invoke-PantryUpgrade -CurrentJar $currentJar -NewJar $newJar -PrevDirectory $upgradeWork `
+            -Stop { } `
+            -Start {
+                if ($script:upgradeStartPhase -eq 'fail') {
+                    $script:upgradeStartPhase = 'ok'
+                    throw 'Start-Service failed'
+                }
+                $script:upgradeStarts++
+            } `
+            -Backup { } -Health { return $true }
+    } catch {
+        $rolled = $true
+        if ($_.Exception.Message -notmatch 'rolled back') { throw }
+    }
+    if (-not $rolled) { throw 'a failed start did not roll back' }
+    if ([System.IO.File]::ReadAllText($currentJar) -ne 'old-jar') { throw 'failed start left the new jar in place' }
+    if ($script:upgradeStarts -le $startsBeforeRollback) { throw 'failed start did not restart the service on the previous jar' }
+} finally {
+    if (Test-Path -LiteralPath $upgradeWork) { Remove-Item -LiteralPath $upgradeWork -Recurse -Force }
+}
+
+if ($register -notmatch 'pantry-purge') { throw 'register script does not register pantry-purge' }
+if ($register -notmatch 'PurgeAt') { throw 'purge time is not a parameter' }
+if ($unregister -notmatch 'pantry-purge') { throw 'unregister script leaves pantry-purge' }
+if ($install -match '(?m)(?i)^\s*(\.|\&).{0,120}register-backup-task') { throw 'install registers scheduled tasks' }
 
 Write-Host 'deploy-scripts.test.ps1 ok'

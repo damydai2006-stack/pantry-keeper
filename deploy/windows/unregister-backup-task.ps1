@@ -1,9 +1,12 @@
-# Remove only the pantry-backup scheduled task.
+# Remove only the pantry-backup and pantry-purge scheduled tasks.
 param(
-    [string]$TaskName = 'pantry-backup'
+    [string[]]$TaskName = @('pantry-backup', 'pantry-purge')
 )
 
 . "$PSScriptRoot\common.ps1"
-Assert-PantryScope -Names @($TaskName)
-Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-Write-Host "Unregistered $TaskName if it was present. Other tasks were not changed."
+foreach ($name in $TaskName) {
+    Assert-PantryScope -Names @($name)
+    Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Host "Unregistered $name if it was present."
+}
+Write-Host 'Other tasks were not changed.'

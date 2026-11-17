@@ -723,9 +723,15 @@ function Wait-PantryHealth {
 function Get-PantryProtectedDirs {
     param([Parameter(Mandatory = $true)][string]$InstallRoot)
     $root = $InstallRoot.TrimEnd('\', '/')
-    $names = @('conf', 'backup', 'data\caddy', 'data\photos', 'logs')
+    # The root, program directories, and data directories. A local user must not
+    # be able to plant a DLL next to binaries that run as LocalSystem.
+    $names = @('', 'bin', 'jre', 'web', 'conf', 'backup', 'data\caddy', 'data\photos', 'logs')
     $out = New-Object System.Collections.Generic.List[string]
     foreach ($name in $names) {
+        if ([string]::IsNullOrEmpty($name)) {
+            [void]$out.Add($root)
+            continue
+        }
         if ($root -match '^[A-Za-z]:') {
             [void]$out.Add($root + '\' + $name)
         } else {
@@ -747,5 +753,115 @@ function Protect-PantryTree {
 }
 
 function Get-PantryBackupOffsiteReminder {
-    return 'Copy these backups to another disk or another machine. A backup that stays on this disk is lost with the disk.'
+    return 'Copy these backups to another disk or another machine. A backup that stays on this disk is lost with the disk. Encrypt that copy or restrict who can read it, because server.env is stored in plaintext.'
+}
+
+function New-PantryBackupStamp {
+    $suffix = (New-PantryCsprngText -Bytes 16 -Encoding hex).Substring(0, 8)
+    return ((Get-Date -Format 'yyyyMMdd-HHmmssfff') + '-' + $suffix)
+}
+
+function Clear-PantryPartialBackup {
+    param([string[]]$Paths = @())
+    foreach ($path in $Paths) {
+        if ([string]::IsNullOrWhiteSpace($path)) { continue }
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Test-PantryFileHashEqual {
+    param([string]$Left, [string]$Right)
+    if (-not (Test-Path -LiteralPath $Left)) { return $false }
+    if (-not (Test-Path -LiteralPath $Right)) { return $false }
+    $leftHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Left).Hash
+    $rightHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Right).Hash
+    return ($leftHash -eq $rightHash)
+}
+
+function Get-PantryPurgeTaskArgument {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][string]$InstallRoot
+    )
+    $ScriptPath = Trim-PantryPath -Path $ScriptPath
+    $InstallRoot = Trim-PantryPath -Path $InstallRoot
+    $joined = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', (Format-PantryPsArg $ScriptPath),
+        '-InstallRoot', (Format-PantryPsArg $InstallRoot)
+    ) -join ' '
+    if ($joined -match '(?i)PGPASSWORD|PANTRY_DB_PASSWORD=') { throw 'Purge task argument must not carry a password.' }
+    return $joined
+}
+
+function Invoke-PantryUpgrade {
+    param(
+        [Parameter(Mandatory = $true)][string]$CurrentJar,
+        [Parameter(Mandatory = $true)][string]$NewJar,
+        [Parameter(Mandatory = $true)][string]$PrevDirectory,
+        [Parameter(Mandatory = $true)][scriptblock]$Stop,
+        [Parameter(Mandatory = $true)][scriptblock]$Start,
+        [Parameter(Mandatory = $true)][scriptblock]$Backup,
+        [Parameter(Mandatory = $true)][scriptblock]$Health
+    )
+    if (-not (Test-Path -LiteralPath $NewJar)) { throw "New jar not found: $NewJar" }
+    & $Stop
+    $needsRestart = $true
+    $swapped = $false
+    $prevPath = $null
+    $failure = $null
+    $skipped = $false
+    try {
+        & $Backup
+        if (Test-PantryFileHashEqual -Left $CurrentJar -Right $NewJar) {
+            $skipped = $true
+        } else {
+            if (Test-Path -LiteralPath $CurrentJar) {
+                if (-not (Test-Path -LiteralPath $PrevDirectory)) {
+                    New-Item -ItemType Directory -Force -Path $PrevDirectory | Out-Null
+                }
+                $prevPath = Join-Path $PrevDirectory ('pantry-server.jar.prev-' + (New-PantryBackupStamp))
+                Copy-Item -LiteralPath $CurrentJar -Destination $prevPath -Force
+            }
+            Copy-Item -LiteralPath $NewJar -Destination $CurrentJar -Force
+            $swapped = $true
+            & $Start
+            if (-not (& $Health)) { throw 'Health check failed.' }
+            $needsRestart = $false
+        }
+    } catch {
+        $failure = $_
+        if ($swapped -and $prevPath -and (Test-Path -LiteralPath $prevPath)) {
+            try { & $Stop } catch { }
+            Copy-Item -LiteralPath $prevPath -Destination $CurrentJar -Force
+        }
+    } finally {
+        if ($needsRestart) {
+            try {
+                & $Start
+            } catch {
+                $restartError = $_.Exception.Message
+                if ($null -eq $failure) {
+                    $failure = $_
+                } else {
+                    $failure = "Original error: $($failure.Exception.Message). Restart also failed: $restartError"
+                }
+            }
+        }
+    }
+    if ($null -ne $failure) {
+        $detail = if ($failure -is [string]) { $failure } else { [string]$failure.Exception.Message }
+        if (-not $swapped) {
+            throw "Upgrade aborted because the backup failed. pantry-server was restarted on the old version. The jar was not modified. Check PostgreSQL login, pg_dump, and server.env. $detail"
+        }
+        throw "Upgrade failed and rolled back pantry-server.jar. The service was restarted on the previous jar. Flyway migrations are forward-only. If the new jar already applied a migration, restore the database from the pre-upgrade dump. $detail"
+    }
+    if ($skipped) {
+        Write-Host 'New jar matches the installed jar. Upgrade skipped. The previous jar was left untouched.'
+        return 'skipped'
+    }
+    return 'upgraded'
 }

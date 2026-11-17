@@ -25,30 +25,43 @@ if ([string]::IsNullOrWhiteSpace($dbPassword)) { throw 'PANTRY_DB_PASSWORD is mi
 
 $destDir = Join-Path $InstallRoot 'backup'
 New-Item -ItemType Directory -Force -Path $destDir | Out-Null
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$stamp = New-PantryBackupStamp
 $dest = Join-Path $destDir ("pantry-{0}.dump" -f $stamp)
+$photoZip = Join-Path $destDir ("pantry-photos-{0}.zip" -f $stamp)
+$envCopy = Join-Path $destDir ("pantry-env-{0}.env" -f $stamp)
 $savedPg = $env:PGPASSWORD
 try {
-    $env:PGPASSWORD = $dbPassword
-    & $dump -h 127.0.0.1 -U $DatabaseUser -d $DatabaseName -Fc -f $dest
-    if ($LASTEXITCODE -ne 0) { throw 'pg_dump failed' }
-} finally {
-    if ($null -eq $savedPg) {
-        Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
-    } else {
-        $env:PGPASSWORD = $savedPg
+    try {
+        $env:PGPASSWORD = $dbPassword
+        & $dump -h 127.0.0.1 -U $DatabaseUser -d $DatabaseName -Fc -f $dest
+        if ($LASTEXITCODE -ne 0) { throw 'pg_dump failed' }
+    } finally {
+        if ($null -eq $savedPg) {
+            Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+        } else {
+            $env:PGPASSWORD = $savedPg
+        }
+        $dbPassword = $null
     }
-    $dbPassword = $null
-}
 
-$photos = Get-PantryDataDir -InstallRoot $InstallRoot
-if (-not (Test-Path -LiteralPath $photos)) {
-    New-Item -ItemType Directory -Force -Path $photos | Out-Null
+    $photos = Get-PantryDataDir -InstallRoot $InstallRoot
+    if (-not (Test-Path -LiteralPath $photos)) {
+        New-Item -ItemType Directory -Force -Path $photos | Out-Null
+    }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    if (Test-Path -LiteralPath $photoZip) { Remove-Item -LiteralPath $photoZip -Force }
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($photos, $photoZip)
+    Copy-Item -LiteralPath $envPath -Destination $envCopy -Force
+    if ($env:OS -eq 'Windows_NT') {
+        Set-PantryConfAcl -Path $dest
+        Set-PantryConfAcl -Path $photoZip
+        Set-PantryConfAcl -Path $envCopy
+        Protect-PantryTree -Path $destDir
+    }
+} catch {
+    Clear-PantryPartialBackup -Paths @($dest, $photoZip, $envCopy)
+    throw
 }
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$photoZip = Join-Path $destDir ("pantry-photos-{0}.zip" -f $stamp)
-if (Test-Path -LiteralPath $photoZip) { Remove-Item -LiteralPath $photoZip -Force }
-[System.IO.Compression.ZipFile]::CreateFromDirectory($photos, $photoZip)
 
 function Remove-PantryOldBackups {
     param([string]$Directory, [string]$Filter, [int]$Retain)
@@ -58,15 +71,6 @@ function Remove-PantryOldBackups {
         if ([string]::IsNullOrWhiteSpace([string]$name)) { continue }
         Remove-Item -LiteralPath (Join-Path $Directory $name) -Force
     }
-}
-
-$envCopy = Join-Path $destDir ("pantry-env-{0}.env" -f $stamp)
-Copy-Item -LiteralPath $envPath -Destination $envCopy -Force
-if ($env:OS -eq 'Windows_NT') {
-    Set-PantryConfAcl -Path $dest
-    Set-PantryConfAcl -Path $photoZip
-    Set-PantryConfAcl -Path $envCopy
-    Protect-PantryTree -Path $destDir
 }
 
 Remove-PantryOldBackups -Directory $destDir -Filter 'pantry-*.dump' -Retain $Keep
