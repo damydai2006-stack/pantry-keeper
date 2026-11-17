@@ -6,6 +6,8 @@ import kotlinx.datetime.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -49,6 +51,62 @@ class AlarmMathTest {
         val nextDay = AlarmMath.nextCatchUp(afterMidnight, LocalTime.of(21, 0), sentToday = false)
         assertEquals(16, nextDay.dayOfMonth)
         assertEquals(21, nextDay.hour)
+    }
+
+    @Test
+    fun notifyAt2359DoesNotScheduleCatchUpAtTheSameInstant() {
+        val notify = LocalTime.of(23, 59)
+        assertFalse(AlarmMath.schedulesCatchUp(notify))
+        assertTrue(AlarmMath.schedulesCatchUp(LocalTime.of(23, 58)))
+        val now = ZonedDateTime.of(2026, 11, 15, 23, 0, 0, 0, zone)
+        val alarm = AlarmMath.nextAlarm(now, notify)
+        val catchUp = AlarmMath.nextCatchUp(now, notify, sentToday = false)
+        assertEquals(15, alarm.at.dayOfMonth)
+        assertEquals(23, alarm.at.hour)
+        assertEquals(59, alarm.at.minute)
+        assertEquals(16, catchUp.dayOfMonth)
+        assertTrue(catchUp.isAfter(alarm.at))
+    }
+
+    @Test
+    fun summaryClaimSendsOnceUnderContention() {
+        val gate = SummaryOnce()
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        var sent = false
+        val sends = AtomicInteger()
+        val threads = (1..2).map {
+            Thread {
+                ready.countDown()
+                start.await()
+                gate.claim(
+                    alreadySent = { sent },
+                    send = {
+                        Thread.sleep(40)
+                        sends.incrementAndGet()
+                    },
+                    mark = { sent = true },
+                )
+            }
+        }
+        threads.forEach { it.start() }
+        ready.await()
+        start.countDown()
+        threads.forEach { it.join() }
+        assertEquals(1, sends.get())
+        assertTrue(sent)
+        assertFalse(
+            gate.claim(alreadySent = { sent }, send = { sends.incrementAndGet() }, mark = { sent = true }),
+        )
+        assertEquals(1, sends.get())
+    }
+
+    @Test
+    fun saveAfterPermanentDenialOpensSettingsInsteadOfExplain() {
+        assertEquals(NotificationFollowUp.EXPLAIN, notificationFollowUp(33, allowed = false, prompted = false))
+        assertEquals(NotificationFollowUp.SETTINGS, notificationFollowUp(33, allowed = false, prompted = true))
+        assertEquals(NotificationFollowUp.NONE, notificationFollowUp(33, allowed = true, prompted = true))
+        assertEquals(NotificationFollowUp.NONE, notificationFollowUp(32, allowed = false, prompted = false))
     }
 
     @Test
