@@ -3,6 +3,7 @@ param(
     [string]$InstallRoot = 'C:\pantry',
     [string]$ServicePrefix = 'pantry',
     [string]$FirewallRuleName = 'pantry-caddy-9443',
+    [string]$AcmeFirewallRuleName = 'pantry-caddy-acme-80',
     [switch]$DropDatabase,
     [string]$DatabaseName = 'pantry',
     [string]$PostgresBin = '',
@@ -10,7 +11,7 @@ param(
 )
 
 . "$PSScriptRoot\common.ps1"
-$names = @("$ServicePrefix-server", "$ServicePrefix-caddy", 'pantry-backup', 'pantry-purge', $FirewallRuleName, $InstallRoot)
+$names = @("$ServicePrefix-server", "$ServicePrefix-caddy", 'pantry-backup', 'pantry-purge', $FirewallRuleName, $AcmeFirewallRuleName, $InstallRoot)
 Assert-PantryScope -Names $names
 if ($DropDatabase) { Assert-SafeIdent -Name $DatabaseName }
 
@@ -24,6 +25,7 @@ foreach ($svc in @("$ServicePrefix-server", "$ServicePrefix-caddy")) {
 }
 
 netsh advfirewall firewall delete rule name="$FirewallRuleName" | Out-Null
+netsh advfirewall firewall delete rule name="$AcmeFirewallRuleName" | Out-Null
 Unregister-ScheduledTask -TaskName 'pantry-backup' -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName 'pantry-purge' -Confirm:$false -ErrorAction SilentlyContinue
 

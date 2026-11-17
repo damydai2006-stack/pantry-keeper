@@ -6,6 +6,9 @@
   <arguments>-Xmx256m -jar __INSTALL_ROOT__\bin\pantry-server.jar</arguments>
   <workingdirectory>__INSTALL_ROOT__</workingdirectory>
   <priority>BelowNormal</priority>
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec"/>
+  <logpath>__INSTALL_ROOT__\logs</logpath>
   <log mode="roll-by-size">
     <sizeThreshold>10240</sizeThreshold>
     <keepFiles>5</keepFiles>

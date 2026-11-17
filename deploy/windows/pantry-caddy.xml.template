@@ -5,9 +5,13 @@
   <executable>__INSTALL_ROOT__\bin\caddy.exe</executable>
   <arguments>run --config __INSTALL_ROOT__\conf\Caddyfile --adapter caddyfile</arguments>
   <workingdirectory>__INSTALL_ROOT__</workingdirectory>
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec"/>
+  <logpath>__INSTALL_ROOT__\logs</logpath>
   <log mode="roll-by-size">
     <sizeThreshold>10240</sizeThreshold>
     <keepFiles>5</keepFiles>
   </log>
+  <env name="PANTRY_ENV_FILE" value="__INSTALL_ROOT__\conf\server.env"/>
   <env name="XDG_DATA_HOME" value="__INSTALL_ROOT__\data\caddy"/>
 </service>
