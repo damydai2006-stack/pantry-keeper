@@ -10,6 +10,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -99,6 +100,18 @@ class AlarmMathTest {
             gate.claim(alreadySent = { sent }, send = { sends.incrementAndGet() }, mark = { sent = true }),
         )
         assertEquals(1, sends.get())
+    }
+
+    @Test
+    fun rescheduleRunsWhenSendingThrows() {
+        var scheduled = false
+        assertFailsWith<IllegalStateException> {
+            finishDelivery(send = { error("send failed") }, reschedule = { scheduled = true })
+        }
+        assertTrue(scheduled)
+        scheduled = false
+        finishDelivery(send = { }, reschedule = { scheduled = true })
+        assertTrue(scheduled)
     }
 
     @Test

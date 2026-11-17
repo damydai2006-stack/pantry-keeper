@@ -129,9 +129,13 @@ object ReminderRuntime {
 
     suspend fun deliver(context: Context) {
         withTimeoutOrNull(5_000) { runCatching { beforeSummary?.invoke() } }
-        sendIfNew(context)
-        val time = context.getSharedPreferences("pantry", Context.MODE_PRIVATE).getString("notify", "09:00")
-        reschedule(context, time)
+        finishDelivery(
+            send = { sendIfNew(context) },
+            reschedule = {
+                val time = context.getSharedPreferences("pantry", Context.MODE_PRIVATE).getString("notify", "09:00")
+                reschedule(context, time)
+            },
+        )
     }
 
     fun deliverAsync(context: Context, finished: () -> Unit) {

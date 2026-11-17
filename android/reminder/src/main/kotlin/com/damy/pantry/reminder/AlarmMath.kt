@@ -102,6 +102,15 @@ class SummaryOnce {
     }
 }
 
+/** Reschedule even when sending throws, so one failure does not drop later alarms. */
+fun finishDelivery(send: () -> Unit, reschedule: () -> Unit) {
+    try {
+        send()
+    } finally {
+        reschedule()
+    }
+}
+
 private const val NOTIF_PROMPTED = "notif_prompted"
 
 fun notificationPrompted(context: android.content.Context): Boolean =
