@@ -84,8 +84,10 @@ class AppConfig(
                 }
                 .toSet()
             if (authMode == AuthMode.TEST) {
-                require(testCode.matches(Regex("\\d{6}"))) { "AUTH_MODE=test requires a 6-digit AUTH_TEST_CODE" }
-                require(phones.isNotEmpty()) { "AUTH_MODE=test requires AUTH_TEST_PHONES" }
+                if (!testCode.matches(Regex("\\d{6}"))) {
+                    error("AUTH_MODE=test requires a 6-digit AUTH_TEST_CODE")
+                }
+                if (phones.isEmpty()) error("AUTH_MODE=test requires AUTH_TEST_PHONES")
             }
             return AppConfig(
                 profile = profile,

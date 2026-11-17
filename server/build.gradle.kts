@@ -58,5 +58,20 @@ tasks.register<JavaExec>("smokeServer") {
 tasks.shadowJar {
     archiveBaseName.set("pantry-server")
     archiveClassifier.set("")
+    // Shadow 9 defaults to DuplicatesStrategy.EXCLUDE, which drops the second
+    // META-INF/services file before mergeServiceFiles() can see it. Flyway then
+    // keeps a single plugin registry and migrate NPEs (DryRunConfigurationExtensionStub).
     mergeServiceFiles()
+    filesMatching("META-INF/services/**") {
+        duplicatesStrategy = org.gradle.api.file.DuplicatesStrategy.INCLUDE
+    }
+}
+
+tasks.register<JavaExec>("verifyShadowMigrate") {
+    group = "verification"
+    description = "Build the fat jar and run Flyway migrate from it against embedded PostgreSQL."
+    dependsOn(tasks.shadowJar)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.pantrykeeper.server.ShadowMigrateCheckKt")
+    args(tasks.shadowJar.get().archiveFile.get().asFile.absolutePath)
 }
