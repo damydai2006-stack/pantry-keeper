@@ -565,9 +565,13 @@ function Get-PantryExpiredBackupNames {
     )
     if ($Keep -lt 1) { throw 'Keep must be at least 1.' }
     $sorted = @($Names | Sort-Object -Descending)
-    if ($sorted.Count -le $Keep) { return ,@() }
+    if ($sorted.Count -le $Keep) { return }
+    # Emit one string per name. `return ,$rest` hands the caller a nested array.
+    # Windows PowerShell 5.1 then fails Join-Path because -ChildPath must be a string.
     $rest = @($sorted | Select-Object -Skip $Keep)
-    return ,$rest
+    foreach ($name in $rest) {
+        [string]$name
+    }
 }
 
 function Get-PantryCertDaysLeft {

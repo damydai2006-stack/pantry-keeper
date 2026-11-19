@@ -80,7 +80,7 @@ if ($plan.Arguments -match 'placeholder-not-printed') { throw 'plan arguments co
 
 $names = @('pantry-20261118-020000.dump', 'pantry-20261117-020000.dump', 'pantry-20261116-020000.dump')
 $drop = @(Get-PantryExpiredBackupNames -Names $names -Keep 2)
-if ($drop.Count -ne 1 -or $drop[0] -ne 'pantry-20261116-020000.dump') { throw 'retention did not drop the oldest' }
+if ($drop.Count -ne 1 -or $drop[0] -isnot [string] -or $drop[0] -ne 'pantry-20261116-020000.dump') { throw 'retention did not drop the oldest' }
 
 $trustees = @(Get-PantryConfTrustees)
 if ($trustees -notcontains 'S-1-5-32-544' -or $trustees -notcontains 'S-1-5-18') { throw 'conf ACL trustees' }
@@ -399,6 +399,87 @@ try {
     if ($script:upgradeStarts -le $startsBeforeRollback) { throw 'failed start did not restart the service on the previous jar' }
 } finally {
     if (Test-Path -LiteralPath $upgradeWork) { Remove-Item -LiteralPath $upgradeWork -Recurse -Force }
+}
+
+function Assert-ExpiredNamesAreStrings {
+    param([string[]]$Names, [int]$Keep, [int]$ExpectedCount, [string]$JoinRoot)
+    $expiredNames = @(Get-PantryExpiredBackupNames -Names $Names -Keep $Keep)
+    if ($expiredNames.Count -ne $ExpectedCount) {
+        throw "expected $ExpectedCount expired names, got $($expiredNames.Count)"
+    }
+    foreach ($expiredName in $expiredNames) {
+        if ($expiredName -isnot [string]) {
+            throw 'expired backup name is not a string'
+        }
+        $joined = Join-Path $JoinRoot $expiredName
+        if ($joined -isnot [string]) { throw 'Join-Path did not return one string path' }
+    }
+}
+
+$retainRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('pantry-retain-' + [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Force -Path $retainRoot | Out-Null
+try {
+    Assert-ExpiredNamesAreStrings -Names @('pantry-b.dump', 'pantry-a.dump') -Keep 2 -ExpectedCount 0 -JoinRoot $retainRoot
+    Assert-ExpiredNamesAreStrings -Names @('pantry-c.dump', 'pantry-b.dump', 'pantry-a.dump') -Keep 2 -ExpectedCount 1 -JoinRoot $retainRoot
+    Assert-ExpiredNamesAreStrings -Names @('pantry-e.dump', 'pantry-d.dump', 'pantry-c.dump', 'pantry-b.dump', 'pantry-a.dump') -Keep 2 -ExpectedCount 3 -JoinRoot $retainRoot
+} finally {
+    if (Test-Path -LiteralPath $retainRoot) { Remove-Item -LiteralPath $retainRoot -Recurse -Force }
+}
+
+$keepRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('pantry-keep-' + [guid]::NewGuid().ToString('n'))
+$pgBin = Join-Path $keepRoot 'pgbin'
+New-Item -ItemType Directory -Force -Path @(
+    (Join-Path $keepRoot 'conf'),
+    (Join-Path $keepRoot 'backup'),
+    (Join-Path $keepRoot 'data\photos'),
+    $pgBin
+) | Out-Null
+try {
+    [System.IO.File]::WriteAllText((Join-Path $keepRoot 'conf\server.env'), "PANTRY_DB_PASSWORD=placeholder-not-a-secret`n")
+    [System.IO.File]::WriteAllText((Join-Path $keepRoot 'data\photos\note.txt'), 'fixture')
+    $fakeDump = Join-Path $pgBin 'pg_dump.exe'
+    $fakeDumpBody = @"
+#!/bin/sh
+out=
+prev=
+for arg in "`$@"; do
+  if [ "`$prev" = -f ]; then out=`$arg; fi
+  prev=`$arg
+done
+: > "`$out"
+exit 0
+"@
+    [System.IO.File]::WriteAllText($fakeDump, $fakeDumpBody.Replace("`r`n", "`n"))
+    if (Get-Command chmod -ErrorAction SilentlyContinue) { & chmod +x $fakeDump }
+    foreach ($oldName in @('pantry-20200101-000000000-aaaaaaa1.dump', 'pantry-20200102-000000000-aaaaaaa2.dump', 'pantry-20200103-000000000-aaaaaaa3.dump')) {
+        [System.IO.File]::WriteAllText((Join-Path $keepRoot "backup\$oldName"), 'old')
+    }
+    & (Join-Path $PSScriptRoot 'backup.ps1') -InstallRoot $keepRoot -PostgresBin $pgBin -DatabaseName pantry -DatabaseUser pantry -Keep 2
+    if ($LASTEXITCODE -ne 0) { throw 'backup.ps1 failed while deleting dumps past Keep' }
+    $left = @(Get-ChildItem -LiteralPath (Join-Path $keepRoot 'backup') -File -Filter 'pantry-*.dump')
+    if ($left.Count -ne 2) { throw "backup cleanup left $($left.Count) dumps" }
+    if (Test-Path -LiteralPath (Join-Path $keepRoot 'backup\pantry-20200101-000000000-aaaaaaa1.dump')) { throw 'oldest dump was not removed' }
+    if (Test-Path -LiteralPath (Join-Path $keepRoot 'backup\pantry-20200102-000000000-aaaaaaa2.dump')) { throw 'second oldest dump was not removed' }
+    & (Join-Path $PSScriptRoot 'backup.ps1') -InstallRoot $keepRoot -PostgresBin $pgBin -DatabaseName pantry -DatabaseUser pantry -Keep 2
+    $left = @(Get-ChildItem -LiteralPath (Join-Path $keepRoot 'backup') -File -Filter 'pantry-*.dump')
+    if ($left.Count -ne 2) { throw "second backup cleanup left $($left.Count) dumps" }
+
+    $svcJar = Join-Path $keepRoot 'pantry-server.jar'
+    $incoming = Join-Path $keepRoot 'incoming.jar'
+    [System.IO.File]::WriteAllText($svcJar, 'installed-jar')
+    [System.IO.File]::WriteAllText($incoming, 'replacement-bytes')
+    $script:keepStarts = 0
+    $upgraded = Invoke-PantryUpgrade -CurrentJar $svcJar -NewJar $incoming -PrevDirectory $keepRoot `
+        -Stop { } -Start { $script:keepStarts++ } `
+        -Backup { & (Join-Path $PSScriptRoot 'backup.ps1') -InstallRoot $keepRoot -PostgresBin $pgBin -DatabaseName pantry -DatabaseUser pantry -Keep 2 } `
+        -Health { return $true }
+    if ($upgraded -ne 'upgraded') { throw 'cleanup during upgrade did not finish the upgrade' }
+    if ([System.IO.File]::ReadAllText($svcJar) -ne 'replacement-bytes') { throw 'upgrade did not keep the new jar' }
+    if ($script:keepStarts -lt 1) { throw 'upgrade did not start the service' }
+    $left = @(Get-ChildItem -LiteralPath (Join-Path $keepRoot 'backup') -File -Filter 'pantry-*.dump')
+    if ($left.Count -ne 2) { throw "upgrade backup cleanup left $($left.Count) dumps" }
+} finally {
+    if (Test-Path -LiteralPath $keepRoot) { Remove-Item -LiteralPath $keepRoot -Recurse -Force }
 }
 
 if ($register -notmatch 'pantry-purge') { throw 'register script does not register pantry-purge' }
