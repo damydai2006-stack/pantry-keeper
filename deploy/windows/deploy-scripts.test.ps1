@@ -401,6 +401,77 @@ try {
     if (Test-Path -LiteralPath $upgradeWork) { Remove-Item -LiteralPath $upgradeWork -Recurse -Force }
 }
 
+function New-PantryTestPgDump {
+    param([Parameter(Mandatory = $true)][string]$Directory)
+    $exe = Join-Path $Directory 'pg_dump.exe'
+    if ($env:OS -eq 'Windows_NT') {
+        $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+        if (-not (Test-Path -LiteralPath $csc)) {
+            $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
+        }
+        if (-not (Test-Path -LiteralPath $csc)) {
+            throw 'Windows test requires csc.exe from .NET Framework to build a real pg_dump.exe. Refusing to pass with a script renamed to .exe.'
+        }
+        $src = Join-Path $Directory 'PgDumpStub.cs'
+        $cs = @'
+using System.IO;
+class PgDumpStub {
+    static int Main(string[] args) {
+        string found = null;
+        for (int i = 0; i < args.Length; i++) {
+            if (args[i] == "-f" && i + 1 < args.Length) {
+                found = args[i + 1];
+            }
+        }
+        if (found == null || found.Length == 0) {
+            return 2;
+        }
+        File.WriteAllBytes(found, new byte[0]);
+        return 0;
+    }
+}
+'@
+        [System.IO.File]::WriteAllText($src, $cs)
+        & $csc /nologo /target:exe ('/out:' + $exe) $src
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exe)) {
+            throw 'csc.exe failed to build the Windows pg_dump.exe test double.'
+        }
+        return 'windows-csc'
+    }
+    $sh = @'
+#!/bin/sh
+out=
+prev=
+for arg in "$@"; do
+  if [ "$prev" = -f ]; then out=$arg; fi
+  prev=$arg
+done
+if [ -z "$out" ]; then
+  exit 2
+fi
+: > "$out"
+exit 0
+'@
+    [System.IO.File]::WriteAllText($exe, $sh.Replace("`r`n", "`n"))
+    if (-not (Get-Command chmod -ErrorAction SilentlyContinue)) {
+        throw 'Linux test requires chmod so the shebang pg_dump.exe can be executed. Refusing to pass without it.'
+    }
+    & chmod +x $exe
+    if ($LASTEXITCODE -ne 0) { throw 'chmod failed for the Linux pg_dump.exe test double.' }
+    return 'linux-shebang'
+}
+
+function Assert-PgDumpDouble {
+    param([Parameter(Mandatory = $true)][string]$Exe, [Parameter(Mandatory = $true)][string]$Work)
+    & $Exe -Fc
+    if ($LASTEXITCODE -eq 0) { throw 'pg_dump double exited 0 without -f' }
+    $probe = Join-Path $Work 'probe.dump'
+    & $Exe -h 127.0.0.1 -U pantry -d pantry -Fc -f $probe
+    if ($LASTEXITCODE -ne 0) { throw "pg_dump double -f exit code $LASTEXITCODE" }
+    if (-not (Test-Path -LiteralPath $probe)) { throw 'pg_dump double did not create the -f file' }
+    Remove-Item -LiteralPath $probe -Force
+}
+
 function Assert-ExpiredNamesAreStrings {
     param([string[]]$Names, [int]$Keep, [int]$ExpectedCount, [string]$JoinRoot)
     $expiredNames = @(Get-PantryExpiredBackupNames -Names $Names -Keep $Keep)
@@ -437,20 +508,12 @@ New-Item -ItemType Directory -Force -Path @(
 try {
     [System.IO.File]::WriteAllText((Join-Path $keepRoot 'conf\server.env'), "PANTRY_DB_PASSWORD=placeholder-not-a-secret`n")
     [System.IO.File]::WriteAllText((Join-Path $keepRoot 'data\photos\note.txt'), 'fixture')
-    $fakeDump = Join-Path $pgBin 'pg_dump.exe'
-    $fakeDumpBody = @"
-#!/bin/sh
-out=
-prev=
-for arg in "`$@"; do
-  if [ "`$prev" = -f ]; then out=`$arg; fi
-  prev=`$arg
-done
-: > "`$out"
-exit 0
-"@
-    [System.IO.File]::WriteAllText($fakeDump, $fakeDumpBody.Replace("`r`n", "`n"))
-    if (Get-Command chmod -ErrorAction SilentlyContinue) { & chmod +x $fakeDump }
+    $script:pgDumpPlatform = New-PantryTestPgDump -Directory $pgBin
+    if ($script:pgDumpPlatform -ne 'windows-csc' -and $script:pgDumpPlatform -ne 'linux-shebang') {
+        throw "unknown pg_dump double platform: $script:pgDumpPlatform"
+    }
+    Write-Host "pg_dump double=$script:pgDumpPlatform"
+    Assert-PgDumpDouble -Exe (Join-Path $pgBin 'pg_dump.exe') -Work $keepRoot
     foreach ($oldName in @('pantry-20200101-000000000-aaaaaaa1.dump', 'pantry-20200102-000000000-aaaaaaa2.dump', 'pantry-20200103-000000000-aaaaaaa3.dump')) {
         [System.IO.File]::WriteAllText((Join-Path $keepRoot "backup\$oldName"), 'old')
     }
@@ -487,4 +550,7 @@ if ($register -notmatch 'PurgeAt') { throw 'purge time is not a parameter' }
 if ($unregister -notmatch 'pantry-purge') { throw 'unregister script leaves pantry-purge' }
 if ($install -match '(?m)(?i)^\s*(\.|\&).{0,120}register-backup-task') { throw 'install registers scheduled tasks' }
 
-Write-Host 'deploy-scripts.test.ps1 ok'
+if ([string]::IsNullOrWhiteSpace($script:pgDumpPlatform)) {
+    throw 'pg_dump double did not run; refusing to report success.'
+}
+Write-Host "deploy-scripts.test.ps1 ok (pg_dump double=$script:pgDumpPlatform)"
