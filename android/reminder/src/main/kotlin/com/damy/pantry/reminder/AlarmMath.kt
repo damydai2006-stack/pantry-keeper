@@ -41,7 +41,16 @@ object AlarmMath {
         return if (raw.toLocalDate() == day && !raw.isAfter(latest)) raw else latest
     }
 
+    /**
+     * 23:59 is the latest catch-up slot, so a reminder at that time would fire the
+     * alarm and the catch-up together. Do not schedule a catch-up in that case.
+     */
+    fun schedulesCatchUp(notify: LocalTime): Boolean = notify.isBefore(LocalTime.of(23, 59))
+
     fun nextCatchUp(now: ZonedDateTime, notify: LocalTime, sentToday: Boolean): ZonedDateTime {
+        if (!schedulesCatchUp(notify)) {
+            return catchUpSlot(now.toLocalDate().plusDays(1), notify, now.zone)
+        }
         val today = now.toLocalDate()
         val slot = catchUpSlot(today, notify, now.zone)
         val endOfDay = today.plusDays(1).atStartOfDay(now.zone)
@@ -66,6 +75,41 @@ const val LIST_CLEARANCE_DP = 16
 /** First system notification prompt is preceded by the in-app explanation. */
 fun shouldExplainNotification(sdk: Int, allowed: Boolean, prompted: Boolean): Boolean =
     sdk >= 33 && !allowed && !prompted
+
+enum class NotificationFollowUp { NONE, EXPLAIN, SETTINGS }
+
+/** Same path as the home banner: explain once, otherwise open system settings. */
+fun notificationFollowUp(sdk: Int, allowed: Boolean, prompted: Boolean): NotificationFollowUp {
+    if (sdk < 33 || allowed) return NotificationFollowUp.NONE
+    return if (shouldExplainNotification(sdk, allowed, prompted)) {
+        NotificationFollowUp.EXPLAIN
+    } else {
+        NotificationFollowUp.SETTINGS
+    }
+}
+
+/** Check, send, and mark share one lock so the alarm and a catch-up cannot both notify. */
+class SummaryOnce {
+    private val lock = Any()
+
+    fun claim(alreadySent: () -> Boolean, send: () -> Unit, mark: () -> Unit): Boolean {
+        synchronized(lock) {
+            if (alreadySent()) return false
+            send()
+            mark()
+            return true
+        }
+    }
+}
+
+/** Reschedule even when sending throws, so one failure does not drop later alarms. */
+fun finishDelivery(send: () -> Unit, reschedule: () -> Unit) {
+    try {
+        send()
+    } finally {
+        reschedule()
+    }
+}
 
 private const val NOTIF_PROMPTED = "notif_prompted"
 

@@ -39,4 +39,13 @@ object DatabaseFactory {
             ready = true
         }
     }
+
+    fun close() {
+        synchronized(lock) {
+            if (::dataSource.isInitialized && !dataSource.isClosed) {
+                dataSource.close()
+            }
+            ready = false
+        }
+    }
 }

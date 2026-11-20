@@ -84,7 +84,7 @@ dai damy 已决：公开仓库 `damydai2006-stack/pantry-keeper`；证书用 Let
 ## 2. 服务端
 
 ### 2.1 技术栈
-Kotlin + Ktor 3（JVM 21）+ kotlinx.serialization + Exposed/JDBC + HikariCP + Flyway，与对讲机一致（对讲机 TECH 第 2 节）。理由：鉴权（手机号+验证码、测试码、手机号加密+HMAC）、WinSW 部署脚本、健康检查、日志规范都能照搬；`:core` 直接复用。代码**复制**而不是依赖对讲机的 jar，两个项目互不影响升级。
+Kotlin + Ktor 3（JVM 21）+ kotlinx.serialization + Exposed/JDBC + HikariCP + Flyway，与对讲机一致（对讲机 TECH 第 2 节）。理由：鉴权（手机号+验证码、测试码、手机号加密+HMAC）、WinSW 部署脚本、健康检查、日志规范都能照搬；`:core` 直接复用。代码**复制**而不是依赖对讲机的 jar，两个项目互不影响升级。打 fat jar 时用 JDK 21。Shadow 9 会在合并前丢掉重复的 `META-INF/services`，必须对 `META-INF/services/**` 使用 `DuplicatesStrategy.INCLUDE` 并 `mergeServiceFiles()`，否则 Flyway 只剩一份插件清单，启动迁移在 `DryRunConfigurationExtensionStub` 上空指针。自测是 `./scripts/verify-shadow-migrate.sh`（不需要 Docker）。
 
 ### 2.2 部署隔离（生产 Windows 服务器，与对讲机同机）
 
@@ -94,9 +94,9 @@ Kotlin + Ktor 3（JVM 21）+ kotlinx.serialization + Exposed/JDBC + HikariCP + F
 | Windows 服务 | `ptt-server`、`ptt-caddy`、`ptt-asr`；演练用 `ptt-drill-*` | `pantry-server`、`pantry-caddy` |
 | 应用端口 | 本机 8080；演练 18080/18443 | 只绑回环 `127.0.0.1:18280`（避开 8080/18080/18443，安装前只读检查占用） |
 | 对外端口 | 8443（Caddy） | IP 模式 `9443`；域名模式 443（另需 80 做 ACME）。安装前只读检查占用 |
-| 防火墙规则 | `ptt-caddy-8443` | `pantry-caddy-9443`，名字不同；脚本只增删自己名字的规则 |
+| 防火墙规则 | `ptt-caddy-8443` | `pantry-caddy-9443` 和 `pantry-caddy-acme-80`（TCP 80，HTTP-01）；脚本只增删自己名字的规则 |
 | 数据库 | 实例 `postgresql-x64-16`，库/角色 `ptt` | 同一实例，新库 `pantry`、新角色 `pantry` |
-| JRE | 对讲机自带 | 自带 jlink 精简 JRE（约 50–60 MB，待确认），不共用，避免对讲机升级换 JRE 时连带 |
+| JRE | 对讲机自带 | Temurin 21 JRE（zip 解压到 `C:\pantry\jre`），构建用 JDK 21。不共用，避免对讲机升级换 JRE 时连带 |
 | 计划任务 | `ptt-backup` | `pantry-backup`、`pantry-purge` |
 
 **Caddy 选独立实例而不是在 `ptt-caddy` 里加站点**：
@@ -104,22 +104,22 @@ Kotlin + Ktor 3（JVM 21）+ kotlinx.serialization + Exposed/JDBC + HikariCP + F
 - 独立 `pantry-caddy`：独立二进制副本、独立 `data` 目录（证书/本地 CA 不混）、独立端口。内存约 30–50 MB，磁盘约 40 MB（待确认）。代价很小，换来完全隔离。
 - 两个实例只要端口不冲突就能共存。以后如果对讲机也要上 443，可以再讨论合并，现在不合并。
 
-**PostgreSQL 复用规则**（安装脚本 `deploy/windows/install.ps1` 的硬约束，吸取对讲机演练方案里的教训）：
-1. 只执行：`CREATE ROLE pantry LOGIN PASSWORD … CONNECTION LIMIT 10`（角色不存在时）、`CREATE DATABASE pantry OWNER pantry`（库不存在时）、`REVOKE CONNECT ON DATABASE pantry FROM PUBLIC`、`ALTER ROLE pantry SET statement_timeout = '5s'`（只改自己的角色）。
+**PostgreSQL 复用规则**（`init-db.ps1` 或操作者手工 SQL；`install.ps1` 不执行这些语句。吸取对讲机演练方案里的教训）：
+1. 只执行：`CREATE ROLE pantry LOGIN PASSWORD … CONNECTION LIMIT 10`（角色不存在时）、`CREATE DATABASE pantry OWNER pantry`（库不存在时）、`REVOKE CONNECT ON DATABASE pantry FROM PUBLIC`、`ALTER ROLE pantry SET statement_timeout = '5s'`（只改自己的角色）。超级用户口令只在 `init-db.ps1` 里交互输入；角色口令从 `server.env` 经 psql `\getenv` 读入。不要把 `PANTRY_DB_PASSWORD` 当成 postgres 超级用户口令。
 2. **绝不**执行 `ALTER ROLE ptt`、不改 `postgresql.conf`、不重启 `postgresql-x64-16`、不调用对讲机的 `Install-Postgres16`/`Initialize-PttDatabase`。
-3. 角色 `pantry` 已存在时不改口令（除非显式 `-ResetPantryPassword`）。
-4. `pg_hba.conf`：安装前只读检查现有规则是否已允许本机回环用口令登录任意库（现有写法部署前只读核对）。如果需要加一行，只能追加 `host pantry pantry 127.0.0.1/32 scram-sha-256` 并 `SELECT pg_reload_conf()`（重读配置，不重启、不断开现有连接）。这一步属于改共享配置，要 dai damy 同意并在维护窗口做。
+3. 角色 `pantry` 已存在时不改口令（除非在 `init-db.ps1` 显式 `-ResetPantryPassword`）。
+4. `pg_hba.conf`：脚本从不自动修改。PostgreSQL 用第一条匹配的规则。若文件靠前已有 `host all all 127.0.0.1/32 scram-sha-256`，本机 `pantry` 已经被覆盖，不必再改。检查时从文件顶部跳过注释和空行，看第一条地址为 `127.0.0.1/32`、库和用户为 `all` 或 `pantry` 的 `host` 行；方式是 `scram-sha-256`、`md5` 或 `password` 即已覆盖。只有这条不存在时，才在维护窗口由人追加 `host pantry pantry 127.0.0.1/32 scram-sha-256` 并 `SELECT pg_reload_conf()`（重读配置，不重启、不断开现有连接）。`install.ps1 -PgHbaPath` 只读打印结论。这一步属于改共享配置，要 dai damy 同意。
 5. 默认 PUBLIC 对 `ptt` 库有 CONNECT 权限，`pantry` 角色理论上能连上 `ptt` 库但没有任何表权限。要彻底封死需要 `REVOKE CONNECT ON DATABASE ptt FROM PUBLIC`，这是改对讲机的库。**本期不做**（Damy 决定），列为已知残留风险（12 节 R11）；验收时只读核对 `pantry` 角色在 `ptt` 库无任何表权限、库名独立。
 6. 连接池 `maximumPoolSize=5`，角色连接上限 10，PG 默认 `max_connections=100`（部署前只读核对现值），不挤占对讲机。
 
-**安装/升级脚本从第一天就参数化**：`-InstallRoot`、`-ServicePrefix`、`-ListenPort`、`-PublicPort`、`-DatabaseName`、`-DatabaseUser`、`-FirewallRuleName`/`-SkipFirewall`、`-OfflineDir`；健康检查读配置里的端口，不写死。`uninstall.ps1` 只认 `pantry-` 前缀。升级失败自动回滚到上一个 jar，回滚后的检查只看 pantry 端口。
+**安装/升级脚本从第一天就参数化**：`-InstallRoot`、`-ServicePrefix`、`-ListenPort`、`-PublicPort`、`-DatabaseName`、`-DatabaseUser`、`-FirewallRuleName`/`-AcmeFirewallRuleName`/`-SkipFirewall`、`-OfflineDir`；健康检查读配置里的端口，不写死。`install.ps1` 解压 Temurin 21 JRE、复制 `caddy.exe` 和 jar、补全 `server.env`（不覆盖已有非空键，缺的密钥用 CSPRNG 生成且不打印），并把 `conf` 的 ACL 限制为 Administrators 和 SYSTEM。照片目录是 `<安装目录>\data\photos`，对应 `PANTRY_DATA_DIR`。`uninstall.ps1` 只认 `pantry-` 前缀。升级失败自动回滚到上一个 jar，回滚后的检查只看 pantry 端口。备份计划任务由 `register-backup-task.ps1` 单独注册，不从安装脚本里自动跑。
 **安装时机**：对讲机升级演练结束、dai damy 同意后才装；本方案阶段不碰服务器。
 
 ### 2.3 资源预算（8 核 / 8 GB / 系统盘约 3 GB 可用，可用空间待部署前复核）
 
 | 项 | 内存 | 磁盘 |
 |---|---|---|
-| pantry-server（`-Xmx256m`，`BelowNormal` 优先级） | 常驻约 350–400 MB | jar 约 30 MB + JRE 约 60 MB |
+| pantry-server（`-Xmx256m`，`BelowNormal` 优先级，JRE 21） | 常驻约 350–400 MB | jar 约 30 MB + Temurin 21 JRE |
 | pantry-caddy | 30–50 MB | 约 40 MB |
 | PostgreSQL 新增（≤5 连接 + 小库） | 约 50 MB | 1 万件物品 < 50 MB |
 | 照片 | — | 见下 |
@@ -128,7 +128,7 @@ Kotlin + Ktor 3（JVM 21）+ kotlinx.serialization + Exposed/JDBC + HikariCP + F
 
 照片是磁盘主要风险：
 - 安卓端压缩：长边 ≤ 1600 px、JPEG 质量 80，约 200–300 KB；同时生成 320 px 缩略图约 25 KB。
-- 文件存 `C:\pantry\data\photos\{family}\{id}.jpg`，数据库只存元数据。
+- 文件存 `C:\pantry\data\photos\{family}\{id}.jpg`（`PANTRY_DATA_DIR`），数据库只存元数据。备份照片只打这个目录，不包含 Caddy 的数据目录或私钥。
 - 服务端两道闸：单家庭上限 `PANTRY_FAMILY_PHOTO_MB=1024`（dai damy 定 1 GB，约 3500 张）；全盘可用空间低于 `PANTRY_MIN_FREE_MB=1500` 时拒绝上传（返回 507，App 提示“服务器空间不足，物品已保存但照片未上传”），**保护对讲机录音和 PG 的空间**。
 - 物品永久删除时同步删照片文件。
 - 系统盘只剩约 3 GB，单家庭 1 GB 上限本身挡不住撑满磁盘，真正保护对讲机的是“剩余低于 1.5 GB 拒绝上传”这道闸，两者都保留。
@@ -262,6 +262,7 @@ devices(id uuid pk, user_id, platform text, push_provider text null, push_token 
 ### 2.7 登录与测试码（Q-01、Q-31、Q-40）
 - 复制对讲机的 `AUTH_MODE=test|sms`、`AUTH_TEST_CODE`、`AUTH_TEST_PHONES`（白名单）机制，**配置独立**：保质期有自己的 `server.env`，测试码、白名单和对讲机无关。
 - dai damy 已定：本期生产也用“测试码 + 号码白名单”，不接短信。只有白名单号码能登录；测试码和白名单只写在服务器本机的 `server.env`，不进仓库、日志和报告。启动日志和 `/readyz` 照常标出测试码模式，便于以后切换真实短信时核对。
+- 安装结束时 `AUTH_MODE=disabled`，服务可以先起来，登录接口不可用。操作者随后在本机 `server.env` 设置 `AUTH_MODE=test`、刚好 6 位数字的 `AUTH_TEST_CODE`、以及 `AUTH_TEST_PHONES`（逗号分隔），再只重启 `pantry-server`。`AUTH_MODE=test` 但验证码为空、不是 6 位，或白名单为空时，进程拒绝启动并退出。
 - 客户端：测试码的自动填写、调时间等调试入口只放在安卓 `debug` 源集里，release 构建不包含。仓库带 `scripts/release-gate.sh`，检查 release 产物里没有调试类名和调试接口字符串（同对讲机的发布闸）。
 - 会话按最近一次使用滑动 30 天（PRD v0.3）：每次经认证的请求更新 `last_used_at`，并把 `expires_at` 改为“本次使用 + 30 天”（同一会话 1 分钟内最多写库一次，减少写放大）。App 会话和网页会话各自滑动，互不影响（Q-31）。过期按服务端时钟判断（可测见 2.9）。
 - 网页必须登录后使用（Q-40）。Cookie 用 SameSite=Strict，写接口另要求自定义请求头，防 CSRF。
@@ -276,10 +277,10 @@ devices(id uuid pk, user_id, platform text, push_provider text null, push_token 
 | C 域名 + 正式证书 | 买域名，Caddy 自动申请证书 | 域名约每年几十元（待确认） | 服务器在中国大陆时域名必须 ICP 备案，否则 80/443 会被拦截（对讲机 TECH 已记）；服务器是否在大陆、能否以这台机器备案待确认 |
 
 落地方式（方案 B）：
-- `pantry-caddy` 对外 9443 提供服务；HTTP-01 验证需要公网 80 可达（由 `pantry-caddy` 监听，对讲机不用 80）。放行 9443 和 80 的防火墙规则仍待 dai damy 同意（第 11 节）。
-- 续期每天检查；`pantry-server` 的 `/readyz` 和部署 `status.ps1` 报告证书剩余天数，低于 3 天告警。
-- 如果 Caddy 不支持 IP 证书，就退回：用独立 ACME 客户端（如 Certbot 5.4+ `--ip-address --preferred-profile shortlived`）签证书，由 `pantry-caddy` 加载文件。
-- App 用系统信任库，不固定会轮换的叶子证书（可选固定 Let’s Encrypt 根证书 SPKI）。服务地址构建时注入，不进仓库。
+- `pantry-caddy` 对外 9443 提供服务；HTTP-01 验证需要公网 80 可达（由 `pantry-caddy` 监听，对讲机不用 80）。防火墙规则是 `pantry-caddy-9443` 和 `pantry-caddy-acme-80`。Caddyfile 使用 `profile shortlived`，并 `disable_tlsalpn_challenge`，避免在 9443 上做 TLS-ALPN。邮箱为空时不写 `email` 行。日志在 `<安装目录>\logs\caddy.log`，站点根目录在 Caddyfile 里用正斜杠。
+- 续期每天检查；`status.ps1` 报告证书颁发者和剩余天数，低于 3 天告警（shortlived 大约 6 天）。公网健康检查的 URL 由参数传入，不写死在脚本里。
+- 如果 Caddy 拿不到 IP 证书，就退回 Certbot，不要改 `ptt-caddy`。Certbot 5.4+ 使用 `--ip-address` 和 `--preferred-profile shortlived` 签发，证书与私钥放在 `<安装目录>\conf\certs\`（随 conf 的 ACL），不要放进 `data\photos`。Caddy 改为 `tls <fullchain> <privkey>` 加载文件。续期任务单独注册，不从 `install.ps1` 自动执行。地址和邮箱都不进仓库。
+- 安卓证书钉扎经 `PANTRY_CA_PINS` 在构建时注入（环境变量或本机 `local.properties`），不进仓库，也不写进 `server.env`。钉当前一代（Generation Y）全部 ECDSA 中间证书 YE1、YE2、YE3。生产链目前经过 YE2。Let’s Encrypt 会在同一代中间证书之间轮换，只钉 YE2 会在换成 YE1 或 YE3 时把客户端拒掉。不要钉叶子。再钉 ISRG Root X1 和 ISRG Root X2 作为备用：中间证书整代更换、链上仍有这些根时，应用还能连上。根钉比中间证书钉宽，只是退路。服务地址同样构建时注入。
 
 ### 2.9 服务端可测时钟（T-09，Damy 决定）
 - 服务端所有“现在”都从注入的 `Clock` 取：会话滑动/过期、邀请码 7 天、`empty_since` 30 天清理、撤销 60 秒宽限、墓碑保留期。代码里禁止直接调用 `Instant.now()`/`LocalDate.now()`（由测试和 release-gate 检查）。
@@ -368,10 +369,10 @@ devices(id uuid pk, user_id, platform text, push_provider text null, push_token 
   - **验收口径（T-11，Damy 决定）**：验收用机必须授予精确闹钟权限，REM-12 的“通知点前一分钟不发、到点或其后一分钟内已发”按精确闹钟判定；10 分钟窗口只是未授权时的体验兜底，不作为 REM-12 的通过标准。
   - 闹钟触发：先尝试 5 秒内 `sync` 一次，失败就用本地缓存 → 按 5.2 计算 → 有内容才发一条汇总通知 → 排下一次。
   - **重排触发（T-10）**：本机任何影响提醒集合的成功写入后立即重排，包括新建、改到期日/生产日期/保质期/档位/开封信息、批量标记已用完/已处理、撤销、恢复、删除（在库或历史）、改 `notify_time`；以及收到 WS `changed` 或任何一次 `/sync` 拉取后、开机（`BOOT_COMPLETED`）、进程启动、系统时间或时区变化（`TIME_SET`/`TIMEZONE_CHANGED`）、被移出家庭（清空并取消全部闹钟）。重排在本地写入提交后同步执行，不等下一次同步。
-  - 另有 WorkManager 一次性补偿：排在当天提醒时间 15 分钟之后。跑的时候如果今天的汇总还没发，并且当地时间还没过 23:59，就补发一次，上午或下午的提醒时间都一样。跑完再排下一天。过了当天不再补发，第二天按提醒时间正常发。
+  - 另有 WorkManager 一次性补偿：排在当天提醒时间 15 分钟之后。跑的时候如果今天的汇总还没发，并且当地时间还没过 23:59，就补发一次，上午或下午的提醒时间都一样。跑完再排下一天。过了当天不再补发，第二天按提醒时间正常发。提醒时间大于等于 23:59 时不再排补发，否则会和闹钟落在同一时刻。闹钟和补发的“是否已发、发送、记下已发”放在同一把锁里，避免同一天发两次。
 - **点通知** → 打开“提醒清单”（已过期 / 7 天内 / 30 天内 / 更远，按到期日排序，已过期置顶，Q-20/Q-22）。
 - **权限**（Q-21）：
-  - Android 13+ 要申请 `POST_NOTIFICATIONS`。未授权时首页顶部常驻提示条，可跳系统设置。
+  - Android 13+ 要申请 `POST_NOTIFICATIONS`。未授权时首页顶部常驻提示条，可跳系统设置。说明框只在还没提示过时出现；已经提示过（包括系统永久拒绝之后）走系统设置，和首页提示条同一条路径。保存提醒时间也走这条路径，避免每次保存都弹出“允许”，而系统对话框已经不会再出现。
   - 同一提示条也引导“允许自启动/后台运行/关闭电池优化”，国产 ROM 需要。
 - **验收**（PRD 验收第 3 条）：
   - debug 包有“模拟今天日期”和“立即生成今日汇总”入口，release 不含。**“立即生成今日汇总”是 AC-03 的正式验收方式**（Damy 决定）；改系统时间可作补充。
@@ -442,7 +443,7 @@ server/          Ktor 服务端、Flyway 迁移
 android/         app / data / capture / reminder
 web/             React + TS
 testdata/        date-cases.json（core 与 web 共用测试向量）、ocr/*.txt 文本夹具
-deploy/windows/  install / upgrade / uninstall / status .ps1（全部参数化）、WinSW xml 模板、Caddyfile 模板
+deploy/windows/  install / init-db / upgrade / uninstall / status / backup / register-backup-task / unregister-backup-task .ps1（全部参数化）、WinSW xml 模板、Caddyfile 模板
 scripts/         check-all.sh（gradle check + npm test）、release-gate.sh（含 debug 入口、测试时钟、密钥/地址扫描）
 docs/            TECH.md、API.md、DEPLOY.md
 .env.example     只有变量名和示例值，没有真实值

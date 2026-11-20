@@ -25,6 +25,11 @@ fun main(args: Array<String>) {
     }
     val clock: Clock = AdjustableClock(Clock.systemUTC()).also { it.adjustable = config.testClockEnabled }
     DatabaseFactory.init(config)
+    if (args.firstOrNull() == "migrate") {
+        log.info("flyway migrate finished")
+        DatabaseFactory.close()
+        exitProcess(0)
+    }
     if (args.firstOrNull() == "purge") {
         val n = PurgeService(clock, java.nio.file.Path.of(config.dataDir)).purge()
         println("purged=$n")

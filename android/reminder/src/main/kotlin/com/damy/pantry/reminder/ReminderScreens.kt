@@ -114,7 +114,20 @@ fun NotifyTimeScreen(repo: PantryRepository, scope: CoroutineScope, onBack: () -
                     }
                     error = null
                     runCatching { ReminderRuntime.reschedule(context, time) }
-                    if (Build.VERSION.SDK_INT >= 33 && !notificationsAllowed(context)) explain = true else onBack()
+                    when (
+                        notificationFollowUp(
+                            Build.VERSION.SDK_INT,
+                            notificationsAllowed(context),
+                            notificationPrompted(context),
+                        )
+                    ) {
+                        NotificationFollowUp.NONE -> onBack()
+                        NotificationFollowUp.EXPLAIN -> explain = true
+                        NotificationFollowUp.SETTINGS -> {
+                            openNotificationSettings(context)
+                            onBack()
+                        }
+                    }
                 }
             },
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("time_save"),

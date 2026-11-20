@@ -32,6 +32,7 @@ object ReminderRuntime {
     /** Best-effort sync before the summary. The app installs this; receivers survive without it. */
     var beforeSummary: (suspend () -> Unit)? = null
 
+    private val summaryOnce = SummaryOnce()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun ensureChannel(context: Context) {
@@ -61,6 +62,10 @@ object ReminderRuntime {
     }
 
     fun scheduleCatchUp(context: Context, notify: LocalTime, now: ZonedDateTime = ZonedDateTime.now(systemZone())) {
+        if (!AlarmMath.schedulesCatchUp(notify)) {
+            runCatching { WorkManager.getInstance(context).cancelUniqueWork("pantry-catchup") }
+            return
+        }
         val at = AlarmMath.nextCatchUp(now, notify, sentToday(context))
         val delay = java.time.Duration.between(now, at).toMillis().coerceAtLeast(0L)
         val request = OneTimeWorkRequestBuilder<CatchUpWorker>()
@@ -110,15 +115,27 @@ object ReminderRuntime {
             .edit().putString("sent", java.time.LocalDate.now(systemZone()).toString()).apply()
     }
 
+    fun sendIfNew(context: Context) {
+        summaryOnce.claim(
+            alreadySent = { sentToday(context) },
+            send = {
+                val items = SqliteItemCache(PantryDatabase.open(context)).snapshot()
+                val body = summaryText(AppToday.today(), items)
+                if (body.isNotBlank()) postSummary(context, body)
+            },
+            mark = { markSent(context) },
+        )
+    }
+
     suspend fun deliver(context: Context) {
         withTimeoutOrNull(5_000) { runCatching { beforeSummary?.invoke() } }
-        if (!sentToday(context)) {
-            val items = SqliteItemCache(PantryDatabase.open(context)).snapshot()
-            val body = summaryText(AppToday.today(), items)
-            if (body.isNotBlank()) postSummary(context, body) else markSent(context)
-        }
-        val time = context.getSharedPreferences("pantry", Context.MODE_PRIVATE).getString("notify", "09:00")
-        reschedule(context, time)
+        finishDelivery(
+            send = { sendIfNew(context) },
+            reschedule = {
+                val time = context.getSharedPreferences("pantry", Context.MODE_PRIVATE).getString("notify", "09:00")
+                reschedule(context, time)
+            },
+        )
     }
 
     fun deliverAsync(context: Context, finished: () -> Unit) {
@@ -168,10 +185,8 @@ class CatchUpWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             )
         }.getOrDefault(LocalTime.of(9, 0))
         val now = ZonedDateTime.now(systemZone())
-        if (AlarmMath.stillTimeToCatchUp(now, notify, ReminderRuntime.sentToday(applicationContext))) {
-            val items = SqliteItemCache(PantryDatabase.open(applicationContext)).snapshot()
-            val body = summaryText(AppToday.today(), items)
-            if (body.isNotBlank()) ReminderRuntime.postSummary(applicationContext, body) else ReminderRuntime.markSent(applicationContext)
+        if (AlarmMath.stillTimeToCatchUp(now, notify, sentToday = false)) {
+            ReminderRuntime.sendIfNew(applicationContext)
         }
         ReminderRuntime.scheduleCatchUp(applicationContext, notify)
         return Result.success()
