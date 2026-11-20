@@ -2,6 +2,86 @@
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 
+function New-PantryTestExecutable {
+    param(
+        [Parameter(Mandatory = $true)][string]$OutputPath,
+        [Parameter(Mandatory = $true)][string]$WindowsSource,
+        [Parameter(Mandatory = $true)][string]$LinuxScript
+    )
+    if ($env:OS -eq 'Windows_NT') {
+        $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+        if (-not (Test-Path -LiteralPath $csc)) {
+            $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
+        }
+        if (-not (Test-Path -LiteralPath $csc)) {
+            throw 'Windows test requires csc.exe from .NET Framework to build a real PE test double. Refusing to pass with a script renamed to .exe.'
+        }
+        $src = [System.IO.Path]::ChangeExtension($OutputPath, '.cs')
+        [System.IO.File]::WriteAllText($src, $WindowsSource)
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $csc
+        $psi.Arguments = '/nologo /target:exe /out:"' + $OutputPath + '" "' + $src + '"'
+        $psi.UseShellExecute = $false
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $proc.WaitForExit()
+        if ($proc.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $OutputPath)) {
+            throw "csc.exe failed ($($proc.ExitCode)) while building $OutputPath."
+        }
+        $magic = [System.IO.File]::ReadAllBytes($OutputPath)
+        if ($magic.Length -lt 2 -or $magic[0] -ne 0x4D -or $magic[1] -ne 0x5A) {
+            throw "Windows test double is not a PE: $OutputPath"
+        }
+        return 'windows-csc'
+    }
+    [System.IO.File]::WriteAllText($OutputPath, $LinuxScript.Replace("`r`n", "`n"))
+    $written = [System.IO.File]::ReadAllText($OutputPath)
+    if (-not $written.StartsWith('#!')) {
+        throw "Linux test double is missing a shebang: $OutputPath"
+    }
+    if (-not (Get-Command chmod -ErrorAction SilentlyContinue)) {
+        throw 'Linux test requires chmod so a shebang test double can be executed. Refusing to pass without it.'
+    }
+    & chmod +x $OutputPath
+    if ($LASTEXITCODE -ne 0) { throw "chmod failed for $OutputPath." }
+    return 'linux-shebang'
+}
+
+function New-PantryTestPgDump {
+    param([Parameter(Mandatory = $true)][string]$Directory)
+    $exe = Join-Path $Directory 'pg_dump.exe'
+    return New-PantryTestExecutable -OutputPath $exe -WindowsSource @'
+using System.IO;
+class PgDumpStub {
+    static int Main(string[] args) {
+        string found = null;
+        for (int i = 0; i < args.Length; i++) {
+            if (args[i] == "-f" && i + 1 < args.Length) {
+                found = args[i + 1];
+            }
+        }
+        if (found == null || found.Length == 0) {
+            return 2;
+        }
+        File.WriteAllBytes(found, new byte[0]);
+        return 0;
+    }
+}
+'@ -LinuxScript @'
+#!/bin/sh
+out=
+prev=
+for arg in "$@"; do
+  if [ "$prev" = -f ]; then out=$arg; fi
+  prev=$arg
+done
+if [ -z "$out" ]; then
+  exit 2
+fi
+: > "$out"
+exit 0
+'@
+}
+
 $existing = "PANTRY_DB_PASSWORD=keep-this`r`n# comment`r`nPANTRY_PROFILE=prod`r`nPANTRY_PHONE_ENC_KEY=`r`n"
 $fill = @(
     @{ Key = 'PANTRY_DB_PASSWORD'; Value = 'replacement-value' },
@@ -104,6 +184,7 @@ try {
     $nested = Join-Path (Join-Path $dir 'src') 'jdk-21-jre'
     $bin = Join-Path $nested 'bin'
     New-Item -ItemType Directory -Force -Path $bin | Out-Null
+    # Marker only. Install-PantryJre looks for this name; the test never executes it.
     [System.IO.File]::WriteAllText((Join-Path $bin 'java.exe'), 'not-a-real-jre')
     $zip = Join-Path $dir 'temurin-21-jre.zip'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -201,24 +282,54 @@ $winswSpec = Get-PantryWinSwSpec
 if ($winswSpec.Version -ne '2.12.0' -or $winswSpec.FileName -ne 'WinSW-x64.exe') { throw 'WinSW is not pinned to v2.12.0 x64' }
 if ($install -match '\$exe status') { throw 'install still trusts the WinSW status exit code' }
 if ($install -notmatch 'Invoke-PantryServiceInstall') { throw 'install does not use Get-Service to decide registration' }
-$work = Join-Path ([System.IO.Path]::GetTempPath()) ('pantry-winsw-' + [guid]::NewGuid().ToString('n'))
+$work = Join-Path ([System.IO.Path]::GetTempPath()) ('pantry winsw ' + [guid]::NewGuid().ToString('n'))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 try {
     $callLog = Join-Path $work 'calls.txt'
     $fake = Join-Path $work 'WinSW-x64.exe'
-    $fakeBody = @"
+    $script:winswPlatform = New-PantryTestExecutable -OutputPath $fake -WindowsSource @'
+using System;
+using System.IO;
+class WinSwStub {
+    static int Main(string[] args) {
+        string dir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+        string line = string.Join(" ", args);
+        File.AppendAllText(Path.Combine(dir, "calls.txt"), line + Environment.NewLine);
+        string cmd = args.Length > 0 ? args[0] : "";
+        if (cmd == "status") {
+            Console.WriteLine("NonExistent");
+            return 0;
+        }
+        if (cmd == "fail") return 3;
+        if (cmd == "install" && File.Exists(Path.Combine(dir, "fail-install"))) return 3;
+        return 0;
+    }
+}
+'@ -LinuxScript @'
 #!/bin/sh
-printf '%s\n' "`$*" >> '$callLog'
-if [ "`$1" = status ]; then
+dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+printf '%s\n' "$*" >> "$dir/calls.txt"
+if [ "$1" = status ]; then
   echo NonExistent
   exit 0
 fi
+if [ "$1" = fail ]; then
+  exit 3
+fi
+if [ "$1" = install ] && [ -f "$dir/fail-install" ]; then
+  exit 3
+fi
 exit 0
-"@
-    [System.IO.File]::WriteAllText($fake, $fakeBody.Replace("`r`n", "`n"))
-    if (Get-Command chmod -ErrorAction SilentlyContinue) { & chmod +x $fake }
-    & $fake status | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'fake WinSW status should exit 0' }
+'@
+    Write-Host "winsw double=$script:winswPlatform"
+    $statusOut = & $fake status | Out-String
+    if ($LASTEXITCODE -ne 0) { throw "WinSW status exit $LASTEXITCODE" }
+    if ($statusOut -notmatch 'NonExistent') { throw 'WinSW status did not print NonExistent' }
+    & $fake fail | Out-Null
+    if ($LASTEXITCODE -ne 3) { throw "WinSW fail exit $LASTEXITCODE" }
+    $logged = [System.IO.File]::ReadAllText($callLog)
+    if ($logged -notmatch '(?m)^status\r?$') { throw 'WinSW status arguments were not recorded' }
+    if ($logged -notmatch '(?m)^fail\r?$') { throw 'WinSW fail arguments were not recorded' }
     Remove-Item -LiteralPath $callLog -Force
     & {
         function Get-Service { param($Name) return $null }
@@ -232,6 +343,18 @@ exit 0
         Invoke-PantryServiceInstall -Exe $fake -Name 'pantry-server'
     }
     if (Test-Path -LiteralPath $callLog) { throw 'install ran even though Get-Service found the service' }
+    [System.IO.File]::WriteAllText((Join-Path $work 'fail-install'), '1')
+    $failedInstall = $false
+    try {
+        & {
+            function Get-Service { param($Name) return $null }
+            Invoke-PantryServiceInstall -Exe $fake -Name 'pantry-server'
+        }
+    } catch {
+        $failedInstall = $true
+        if ($_.Exception.Message -notmatch 'install failed') { throw }
+    }
+    if (-not $failedInstall) { throw 'non-zero WinSW install was treated as success' }
 } finally {
     if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
 }
@@ -401,70 +524,10 @@ try {
     if (Test-Path -LiteralPath $upgradeWork) { Remove-Item -LiteralPath $upgradeWork -Recurse -Force }
 }
 
-function New-PantryTestPgDump {
-    param([Parameter(Mandatory = $true)][string]$Directory)
-    $exe = Join-Path $Directory 'pg_dump.exe'
-    if ($env:OS -eq 'Windows_NT') {
-        $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-        if (-not (Test-Path -LiteralPath $csc)) {
-            $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
-        }
-        if (-not (Test-Path -LiteralPath $csc)) {
-            throw 'Windows test requires csc.exe from .NET Framework to build a real pg_dump.exe. Refusing to pass with a script renamed to .exe.'
-        }
-        $src = Join-Path $Directory 'PgDumpStub.cs'
-        $cs = @'
-using System.IO;
-class PgDumpStub {
-    static int Main(string[] args) {
-        string found = null;
-        for (int i = 0; i < args.Length; i++) {
-            if (args[i] == "-f" && i + 1 < args.Length) {
-                found = args[i + 1];
-            }
-        }
-        if (found == null || found.Length == 0) {
-            return 2;
-        }
-        File.WriteAllBytes(found, new byte[0]);
-        return 0;
-    }
-}
-'@
-        [System.IO.File]::WriteAllText($src, $cs)
-        & $csc /nologo /target:exe ('/out:' + $exe) $src
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exe)) {
-            throw 'csc.exe failed to build the Windows pg_dump.exe test double.'
-        }
-        return 'windows-csc'
-    }
-    $sh = @'
-#!/bin/sh
-out=
-prev=
-for arg in "$@"; do
-  if [ "$prev" = -f ]; then out=$arg; fi
-  prev=$arg
-done
-if [ -z "$out" ]; then
-  exit 2
-fi
-: > "$out"
-exit 0
-'@
-    [System.IO.File]::WriteAllText($exe, $sh.Replace("`r`n", "`n"))
-    if (-not (Get-Command chmod -ErrorAction SilentlyContinue)) {
-        throw 'Linux test requires chmod so the shebang pg_dump.exe can be executed. Refusing to pass without it.'
-    }
-    & chmod +x $exe
-    if ($LASTEXITCODE -ne 0) { throw 'chmod failed for the Linux pg_dump.exe test double.' }
-    return 'linux-shebang'
-}
-
 function Assert-PgDumpDouble {
     param([Parameter(Mandatory = $true)][string]$Exe, [Parameter(Mandatory = $true)][string]$Work)
     & $Exe -Fc
-    if ($LASTEXITCODE -eq 0) { throw 'pg_dump double exited 0 without -f' }
+    if ($LASTEXITCODE -ne 2) { throw "pg_dump double without -f exited $LASTEXITCODE" }
     $probe = Join-Path $Work 'probe.dump'
     & $Exe -h 127.0.0.1 -U pantry -d pantry -Fc -f $probe
     if ($LASTEXITCODE -ne 0) { throw "pg_dump double -f exit code $LASTEXITCODE" }
@@ -497,7 +560,7 @@ try {
     if (Test-Path -LiteralPath $retainRoot) { Remove-Item -LiteralPath $retainRoot -Recurse -Force }
 }
 
-$keepRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('pantry-keep-' + [guid]::NewGuid().ToString('n'))
+$keepRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('pantry keep ' + [guid]::NewGuid().ToString('n'))
 $pgBin = Join-Path $keepRoot 'pgbin'
 New-Item -ItemType Directory -Force -Path @(
     (Join-Path $keepRoot 'conf'),
@@ -550,7 +613,10 @@ if ($register -notmatch 'PurgeAt') { throw 'purge time is not a parameter' }
 if ($unregister -notmatch 'pantry-purge') { throw 'unregister script leaves pantry-purge' }
 if ($install -match '(?m)(?i)^\s*(\.|\&).{0,120}register-backup-task') { throw 'install registers scheduled tasks' }
 
-if ([string]::IsNullOrWhiteSpace($script:pgDumpPlatform)) {
-    throw 'pg_dump double did not run; refusing to report success.'
+if ([string]::IsNullOrWhiteSpace($script:winswPlatform) -or [string]::IsNullOrWhiteSpace($script:pgDumpPlatform)) {
+    throw 'a required test double did not run; refusing to report success.'
 }
-Write-Host "deploy-scripts.test.ps1 ok (pg_dump double=$script:pgDumpPlatform)"
+if ($script:winswPlatform -ne $script:pgDumpPlatform) {
+    throw "test doubles disagree: winsw=$script:winswPlatform pg_dump=$script:pgDumpPlatform"
+}
+Write-Host "deploy-scripts.test.ps1 ok (doubles=$script:winswPlatform)"
