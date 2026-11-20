@@ -55,6 +55,14 @@ tasks.register<JavaExec>("smokeServer") {
     workingDir = layout.buildDirectory.dir("smoke-server").get().asFile.apply { mkdirs() }
 }
 
+tasks.register<JavaExec>("itServer") {
+    group = "application"
+    description = "Loopback embedded-Postgres server for two synthetic web accounts. Credentials stay in /tmp."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.pantrykeeper.server.IntegrationServerKt")
+    workingDir = layout.buildDirectory.dir("it-server").get().asFile.apply { mkdirs() }
+}
+
 tasks.shadowJar {
     archiveBaseName.set("pantry-server")
     archiveClassifier.set("")
