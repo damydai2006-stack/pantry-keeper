@@ -2,7 +2,7 @@
 
 家用食品、药品、调料保质期。公开仓库，不含服务器地址、测试码、手机号或密钥。
 
-`feat/android-core` 叠在物品同步之上：安卓登录、家庭、清单、手填、批量撤销、历史和离线同步。扫码、拍照和提醒页仍是占位。网页不在本期。
+安卓已有登录、家庭、清单、手填、批量撤销、历史、离线同步、扫码和本地提醒。网页在 `web/`，和安卓使用同一套 API。本地运行、测试和 API 配置见 `web/README.md`。仓库没有线上地址，静态构建不等于已经部署。
 
 ## 本地运行
 
@@ -33,6 +33,7 @@ java -jar server/build/libs/pantry-server.jar
 
 - `core/` 纯 Kotlin（目前只开 JVM）：`DateMath`、`DateParser`、`ReminderRules`
 - `server/` Ktor 与 Flyway
+- `web/` React + TypeScript。构建产物是静态文件，需要和 API 同源托管
 - `testdata/` `date-cases.json` 与 `ocr/*.txt`
 - `deploy/windows/` 安装、升级、卸载、状态脚本，以及 WinSW、Caddy 模板
 - `docs/TECH.md` 技术方案 v0.2

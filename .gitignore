@@ -10,7 +10,12 @@ out/
 server.env
 *.env
 !.env.example
+.env.local
+.env.*.local
 local.properties
+
+node_modules/
+web/dist/
 
 *.jks
 *.pem
