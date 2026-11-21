@@ -1,0 +1,82 @@
+:root {
+  color: #1a1d1a;
+  background: #f4f1eb;
+  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+  line-height: 1.5;
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; }
+
+button, input, select, textarea { font: inherit; }
+
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px 16px 32px;
+}
+
+.brand {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.mark {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: #1e4a62;
+  color: white;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+}
+
+h1, h2, h3 { margin: 0; }
+
+.muted { color: #3e4640; }
+
+.stack { display: flex; flex-direction: column; gap: 12px; }
+
+.panel, .item {
+  background: #fff;
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.item { margin: 8px 0; }
+
+.group-title { margin: 18px 0 4px; }
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.spread { justify-content: space-between; }
+
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-weight: 700;
+}
+
+.badge-expired { background: #fcebea; color: #8b1a14; }
+.badge-soon { background: #fef0e4; color: #8a3d00; }
+.badge-month { background: #fbf3d0; color: #6b4e00; }
+.badge-later { background: #e5f3ea; color: #145a32; }
+
+.center { min-height: 50vh; display: grid; place-items: center; }
+
+.form-grid { display: grid; gap: 8px; }
+
+@media (max-width: 640px) {
+  .app { padding: 12px 12px 24px; }
+  .row { align-items: stretch; }
+}
