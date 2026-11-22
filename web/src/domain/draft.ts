@@ -79,6 +79,24 @@ export function emptyDraft(): ItemDraft {
   }
 }
 
+const DURATION_BASES = new Set(["manual_duration_from_prod", "manual_duration_from_today", "ocr_prod_plus_life"])
+
+function shelfUnitOf(unit: string | null): ShelfUnit | null {
+  if (unit === "day" || unit === "month" || unit === "year") return unit
+  return null
+}
+
+function hasShelf(item: StoredItem): boolean {
+  const unit = shelfUnitOf(item.shelf_life_unit)
+  return item.shelf_life_value != null && unit != null && shelfAllowed(item.shelf_life_value, unit)
+}
+
+// Duration rows that still have a usable shelf reopen in shelf mode.
+// A package date or a typed date stays on that date, even when shelf columns are left behind.
+function restoredMode(item: StoredItem): ItemDraft["mode"] {
+  return DURATION_BASES.has(item.expiry_basis) && hasShelf(item) ? "shelf" : "date"
+}
+
 export function draftFromItem(item: StoredItem): ItemDraft {
   return {
     name: item.name,
@@ -86,11 +104,11 @@ export function draftFromItem(item: StoredItem): ItemDraft {
     quantity: item.quantity,
     location: item.location ?? "",
     note: item.note ?? "",
-    mode: "date",
+    mode: restoredMode(item),
     expiryDate: item.expiry_date,
     productionDate: item.production_date ?? "",
     shelfValue: item.shelf_life_value,
-    shelfUnit: item.shelf_life_unit === "month" || item.shelf_life_unit === "year" ? item.shelf_life_unit : "day",
+    shelfUnit: shelfUnitOf(item.shelf_life_unit) ?? "day",
     tiers: [...item.reminder_tiers],
     openedDate: item.opened_date ?? "",
     afterOpenDays: item.after_open_days == null ? "" : String(item.after_open_days),
@@ -126,6 +144,17 @@ export function resolveDraft(draft: ItemDraft, today: string): ResolvedDraft | {
   const basis = production ? "manual_duration_from_prod" : "manual_duration_from_today"
   const origin = production ? `从生产日期 ${production} 起算` : `未填写生产日期，从入库当天（${today}）起算`
   return { expiry: addShelf(start, draft.shelfValue, draft.shelfUnit), basis, origin: `${origin}。按此计算，到期日为` }
+}
+
+export function previewDraft(draft: ItemDraft, today: string, original?: StoredItem | null): ResolvedDraft | { error: string } {
+  const resolved = resolveDraft(draft, today)
+  if ("error" in resolved || !original || !expiryCalculationUnchanged(original, draft)) return resolved
+  if (resolved.expiry === original.expiry_date) return { ...resolved, basis: original.expiry_basis }
+  const production = draft.productionDate.trim()
+  const origin = production
+    ? `从生产日期 ${production} 起算。按此计算，到期日为`
+    : `未填写生产日期，从入库当天起算。按此计算，到期日为`
+  return { expiry: original.expiry_date, basis: original.expiry_basis, origin }
 }
 
 export function createBody(draft: ItemDraft, today: string): { error: string } | { value: Record<string, unknown> } {
@@ -173,20 +202,35 @@ export function patchFields(original: StoredItem, draft: ItemDraft, today: strin
   if (location !== (original.location ?? "")) fields.location = location || null
   const note = draft.note.trim()
   if (note !== (original.note ?? "")) fields.note = note || null
-  if (resolved.expiry !== original.expiry_date) fields.expiry_date = resolved.expiry
+  // Leave a stored expiry and its basis alone until the user edits that calculation.
+  // Opening a today-anchored shelf on a later day must not slide the date forward,
+  // and an untouched OCR source must not be rewritten as a manual basis.
+  if (!expiryCalculationUnchanged(original, draft)) {
+    if (resolved.expiry !== original.expiry_date) fields.expiry_date = resolved.expiry
+    if (draft.mode === "shelf") {
+      if (draft.shelfValue !== original.shelf_life_value) fields.shelf_life_value = draft.shelfValue
+      if (draft.shelfUnit !== (original.shelf_life_unit ?? "")) fields.shelf_life_unit = draft.shelfUnit
+    }
+    if (resolved.basis !== original.expiry_basis) fields.expiry_basis = resolved.basis
+  }
   const production = draft.productionDate.trim()
   if (production !== (original.production_date ?? "")) fields.production_date = production || null
-  if (draft.mode === "shelf") {
-    if (draft.shelfValue !== original.shelf_life_value) fields.shelf_life_value = draft.shelfValue
-    if (draft.shelfUnit !== (original.shelf_life_unit ?? "")) fields.shelf_life_unit = draft.shelfUnit
-  }
-  if (resolved.basis !== original.expiry_basis) fields.expiry_basis = resolved.basis
   if (!sameTiers(draft.tiers, original.reminder_tiers)) fields.reminder_tiers = draft.tiers
   const nextOpened = opened.openedDate
   const prevOpened = original.opened_date
   if (nextOpened !== prevOpened) fields.opened_date = nextOpened
   if (opened.afterOpenDays !== original.after_open_days) fields.after_open_days = opened.afterOpenDays
   return { value: Object.keys(fields).length === 0 ? null : fields }
+}
+
+function expiryCalculationUnchanged(original: StoredItem, draft: ItemDraft): boolean {
+  if (draft.mode !== restoredMode(original)) return false
+  if (draft.mode === "shelf") {
+    return draft.shelfValue === original.shelf_life_value
+      && draft.shelfUnit === shelfUnitOf(original.shelf_life_unit)
+      && draft.productionDate.trim() === (original.production_date ?? "")
+  }
+  return draft.expiryDate.trim() === original.expiry_date
 }
 
 function sameTiers(left: readonly string[], right: readonly string[]): boolean {

@@ -76,6 +76,7 @@ export function ItemScreen({
       </div>
       {editing !== null ? (
         <ItemForm
+          key={editing === "new" ? "new" : `${editing.id}:${editing.rev}`}
           today={today}
           editing={editing === "new" ? null : editing}
           busy={busy}
