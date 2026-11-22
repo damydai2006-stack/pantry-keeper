@@ -4,6 +4,12 @@ import { createBody, draftFromItem, emptyDraft, patchFields, previewDraft, CATEG
 import type { Item } from "../api/types"
 import { takeCodePoints } from "../domain/text"
 
+// The save baseline is the opened id and rev. A different item, a new item, or a newer
+// revision has to start from that row; a list refresh alone does not change it.
+function formIdentity(editing: Item | null): string {
+  return editing ? `${editing.id}:${editing.rev}` : "new"
+}
+
 export function ItemForm({
   today,
   editing,
@@ -19,8 +25,15 @@ export function ItemForm({
   onCreate: (body: Record<string, unknown>) => Promise<void>
   onUpdate: (id: string, baseRev: number, fields: Record<string, unknown>) => Promise<string | null>
 }) {
+  const identity = formIdentity(editing)
   const [draft, setDraft] = useState<ItemDraft>(() => (editing ? draftFromItem(editing) : emptyDraft()))
   const [error, setError] = useState<string | null>(null)
+  const [boundIdentity, setBoundIdentity] = useState(identity)
+  if (boundIdentity !== identity) {
+    setBoundIdentity(identity)
+    setDraft(editing ? draftFromItem(editing) : emptyDraft())
+    setError(null)
+  }
   const preview = useMemo(() => previewDraft(draft, today, editing), [draft, today, editing])
   const customLocation = !LOCATIONS.includes(draft.location as (typeof LOCATIONS)[number]) && draft.location !== ""
 
