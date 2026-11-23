@@ -56,13 +56,15 @@
 | POST | `/items` | 新建。名称必填且不超过 40 字。到期日，或生产日期加保质期，或只有保质期（从 `client_today` 起算，缺省用服务器时钟的 UTC 日期）。分类默认 `food`，数量默认 1。自定义位置不超过 12 字，备注不超过 200 字。提醒档位可多选，默认 `D30`+`D5`，空数组表示不提醒。可带开封日期和开封后天数。客户端可带 `id`，重复提交返回已有行 |
 | GET | `/items`、`/items/{id}` | 只读当前家庭。已删除且有墓碑时，`GET /items/{id}` 返回 410 `item_deleted`，文案含「已被某某删除」 |
 | PATCH | `/items/{id}` | `{base_rev, fields}`。按字段后写为准。别人先改过的字段放进 `overwritten`，`message` 含「已被某某修改」 |
-| POST | `/items/batch` | `used_up` / `discarded` / `restore` / `delete`。一个事务。任何一个 id 不属于当前家庭，整批 404，不做修改。删除对在库和历史都可用，写墓碑，不返回撤销令牌。其他操作返回 `undo_token`。恢复只改状态，档位不变 |
+| POST | `/items/batch` | `used_up` / `discarded` / `restore` / `delete`。一个事务。任何一个 id 不属于当前家庭，整批 404，不做修改。删除对在库和历史都可用，写墓碑，不返回撤销令牌。其他操作返回 `undo_token`。`restore` 只把 `status` 改回 `in_stock`，不改 `expiry_date` 和 `reminder_tiers` |
 | POST | `/items/batch/undo` | 独立事务。令牌 60 秒内有效（客户端按钮是 5 秒），且只能成功使用一次：用过后删除令牌，再次调用返回 404 `not_found`，物品状态和 rev 不变。超过 60 秒仍是 410 `undo_expired`。别人在这批之后改过状态，或物品已删除，就跳过，响应 `skipped` 和「N 件已被他人修改，未撤销」 |
 | GET | `/sync?since=` | `since=0` 为当前快照。否则返回 `rev` 更大的物品和墓碑，并带上当前家庭和提醒时间。游标早于已清理的墓碑时 `reset: true`，调用方应再拉 `since=0` |
 | GET | `/ws` 与 `/api/v1/ws` | 注册成功后先推 `{"t":"ready"}`，之后只推 `changed`、`removed_from_family`、`session_revoked`。写提交之后才推 `changed`。被移除的连接先收到通知再关掉，下一次请求 403。登出会删掉当前会话并立刻向该会话的连接推 `session_revoked` 后关闭；会话过期后同样断开，不再推 `changed`。同一用户的其他会话不受影响 |
 | POST | `/items/{id}/photo` | 仅 App 会话。只收 JPEG / WEBP。先锁家庭并确认物品属于当前家庭，不属于则 404，此时不写盘。通过后才写文件。单张上限 `PANTRY_PHOTO_MAX_BYTES`。家庭合计默认 1 GB，磁盘剩余低于 `PANTRY_MIN_FREE_MB`（默认 1500）时 507 |
 | GET | `/photos/{id}?thumb=1` | 先核对家庭再读文件。其他家庭 404，响应里没有图片字节。已无家庭则 403 |
 | GET | `/barcodes/{code}` | 先查服务端缓存，再请求 Open Food Facts，超时默认 3 秒。失败时 `found: false`，客户端改手填。20 位追溯码直接 `reason: trace_code`。不需要密钥 |
+
+物品 JSON 在状态变更后可带 `status_changed_at`（ISO-8601）。没有变更过状态时省略。历史页用它显示处理日期。
 
 ## 资源归属（给后续 PR）
 
