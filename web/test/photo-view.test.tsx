@@ -1,15 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { ConfigProvider } from "antd"
 import zhCN from "antd/locale/zh_CN"
 import { describe, expect, it } from "vitest"
 import { App } from "../src/App"
+import { createClient, type FetchLike } from "../src/api/client"
 import type { PantryClient } from "../src/api/client"
 import { ApiError, type Family, type Item, type Me } from "../src/api/types"
 import type { SocketLike } from "../src/sync/useFamilySync"
 import { ItemScreen } from "../src/ui/ItemScreen"
-import type { PhotoLoad } from "../src/ui/PhotoView"
+import { PhotoDialog, type PhotoLoad } from "../src/ui/PhotoView"
 
 const MILK_PHOTO = "photo-milk-secret"
 const RICE_PHOTO = "photo-rice-secret"
@@ -134,9 +135,9 @@ function renderScreen(items: Item[], load: PhotoLoad, log = calls(), online?: bo
           log.historyDelete.push(ids)
         }}
         onLogout={async () => undefined}
-        onLoadPhoto={async (id) => {
+        onLoadPhoto={async (id, signal) => {
           log.photo.push(id)
-          return load(id)
+          return load(id, signal)
         }}
       />
     </ConfigProvider>,
@@ -416,4 +417,172 @@ describe("read-only photo view", () => {
     expect(screen.getByRole("heading", { name: "牛奶", level: 3 })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "编辑" })).toBeInTheDocument()
   })
+
+  it("aborts the in-flight photo GET when the preview closes and drops a late body", async () => {
+    const user = userEvent.setup()
+    const blobs = watchBlobUrls()
+    try {
+      let signal: AbortSignal | undefined
+      let resolveLate: ((blob: Blob) => void) | undefined
+      const log = calls()
+      const milk = item({ id: "milk", name: "牛奶", status: "in_stock", expiry_date: "2026-11-20", photo_id: MILK_PHOTO })
+      renderScreen([milk], (_id, next) => new Promise<Blob>((resolve) => {
+        signal = next
+        resolveLate = resolve
+      }), log)
+      await user.click(screen.getByRole("button", { name: "查看牛奶的照片" }))
+      await screen.findByRole("dialog", { name: "查看照片" })
+      await waitFor(() => expect(signal?.aborted).toBe(false))
+      await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "关闭" }))
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+      expect(signal?.aborted).toBe(true)
+      await act(async () => {
+        resolveLate?.(jpeg())
+        await Promise.resolve()
+      })
+      expect(screen.queryByRole("img", { name: "牛奶的照片" })).toBeNull()
+      expect(screen.queryByText("照片加载失败")).toBeNull()
+      expect(blobs.created).toEqual([])
+      expect(log).toMatchObject({ delete: 0, used: 0, update: 0, mark: [], restore: [] })
+    } finally {
+      blobs.restore()
+    }
+  })
+
+  it("revokes the blob URL when a loaded preview closes", async () => {
+    const user = userEvent.setup()
+    const blobs = watchBlobUrls()
+    try {
+      let signal: AbortSignal | undefined
+      const milk = item({ id: "milk", name: "牛奶", status: "in_stock", expiry_date: "2026-11-20", photo_id: MILK_PHOTO })
+      renderScreen([milk], (_id, next) => {
+        signal = next
+        return Promise.resolve(jpeg())
+      })
+      await user.click(screen.getByRole("button", { name: "查看牛奶的照片" }))
+      const image = await screen.findByRole("img", { name: "牛奶的照片" })
+      const src = image.getAttribute("src")
+      expect(src).toMatch(/^blob:/)
+      expect(signal?.aborted).toBe(false)
+      await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "关闭" }))
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+      expect(signal?.aborted).toBe(true)
+      expect(blobs.revoked).toContain(src)
+      expect(screen.queryByRole("img", { name: "牛奶的照片" })).toBeNull()
+    } finally {
+      blobs.restore()
+    }
+  })
+
+  it("aborts the previous photo GET when the preview switches and ignores its late body", async () => {
+    const blobs = watchBlobUrls()
+    try {
+      const pending: { id: string; signal: AbortSignal; resolve: (blob: Blob) => void }[] = []
+      const load: PhotoLoad = (id, signal) => new Promise((resolve) => {
+        pending.push({ id, signal, resolve })
+      })
+      const view = render(preview(MILK_PHOTO, "牛奶", load))
+      await waitFor(() => expect(pending).toHaveLength(1))
+      view.rerender(preview(RICE_PHOTO, "大米", load))
+      await waitFor(() => expect(pending).toHaveLength(2))
+      expect(pending[0]?.signal.aborted).toBe(true)
+      expect(pending[1]?.signal.aborted).toBe(false)
+      expect(pending[1]?.id).toBe(RICE_PHOTO)
+      const createdBeforeLate = blobs.created.length
+      await act(async () => {
+        pending[0]?.resolve(jpeg())
+        await Promise.resolve()
+      })
+      expect(blobs.created).toHaveLength(createdBeforeLate)
+      expect(screen.queryByRole("img")).toBeNull()
+      expect(screen.queryByText("照片加载失败")).toBeNull()
+      pending[1]?.resolve(jpeg())
+      const image = await screen.findByRole("img", { name: "大米的照片" })
+      expect(image.getAttribute("src")).toMatch(/^blob:/)
+      expect(pending[0]?.signal.aborted).toBe(true)
+      expect(pending[1]?.signal.aborted).toBe(false)
+    } finally {
+      blobs.restore()
+    }
+  })
+
+  it("revokes the previous blob URL when a loaded preview switches to another photo", async () => {
+    const blobs = watchBlobUrls()
+    try {
+      const signals: AbortSignal[] = []
+      const load: PhotoLoad = (_id, signal) => {
+        signals.push(signal)
+        return Promise.resolve(jpeg())
+      }
+      const view = render(preview(MILK_PHOTO, "牛奶", load))
+      const first = await screen.findByRole("img", { name: "牛奶的照片" })
+      const firstSrc = first.getAttribute("src")
+      expect(firstSrc).toMatch(/^blob:/)
+      view.rerender(preview(RICE_PHOTO, "大米", load))
+      const second = await screen.findByRole("img", { name: "大米的照片" })
+      expect(signals[0]?.aborted).toBe(true)
+      expect(signals[1]?.aborted).toBe(false)
+      expect(blobs.revoked).toContain(firstSrc)
+      expect(second.getAttribute("src")).toMatch(/^blob:/)
+      expect(second.getAttribute("src")).not.toBe(firstSrc)
+      expect(screen.queryByRole("img", { name: "牛奶的照片" })).toBeNull()
+    } finally {
+      blobs.restore()
+    }
+  })
+
+  it("passes the dialog abort signal through to the photo GET", async () => {
+    const signals: AbortSignal[] = []
+    const fetchImpl: FetchLike = (url, init) => new Promise((_resolve, reject) => {
+      expect(url).toBe(`/api/v1/photos/${MILK_PHOTO}`)
+      const signal = init?.signal
+      if (!signal) {
+        reject(new Error("missing signal"))
+        return
+      }
+      signals.push(signal)
+      signal.addEventListener("abort", () => {
+        reject(new DOMException("The operation was aborted.", "AbortError"))
+      }, { once: true })
+    })
+    const api = createClient({ fetch: fetchImpl })
+    const view = render(preview(MILK_PHOTO, "牛奶", (id, signal) => api.photo(id, signal)))
+    await waitFor(() => expect(signals).toHaveLength(1))
+    expect(signals[0]?.aborted).toBe(false)
+    view.unmount()
+    await waitFor(() => expect(signals[0]?.aborted).toBe(true))
+    expect(screen.queryByText("照片加载失败")).toBeNull()
+  })
 })
+
+function preview(photoId: string, name: string, load: PhotoLoad) {
+  return (
+    <ConfigProvider locale={zhCN} button={{ autoInsertSpace: false }}>
+      <PhotoDialog name={name} photoId={photoId} loadPhoto={load} onClose={() => undefined} />
+    </ConfigProvider>
+  )
+}
+
+function watchBlobUrls() {
+  const created: string[] = []
+  const revoked: string[] = []
+  const originalCreate = URL.createObjectURL
+  const originalRevoke = URL.revokeObjectURL
+  URL.createObjectURL = ((blob: Blob) => {
+    const url = originalCreate.call(URL, blob)
+    created.push(url)
+    return url
+  }) as typeof URL.createObjectURL
+  URL.revokeObjectURL = ((url: string) => {
+    revoked.push(url)
+    originalRevoke.call(URL, url)
+  }) as typeof URL.revokeObjectURL
+  return {
+    created,
+    revoked,
+    restore() {
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+    },
+  }
+}

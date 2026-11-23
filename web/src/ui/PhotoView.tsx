@@ -2,7 +2,7 @@ import { Button, Modal } from "antd"
 import { useEffect, useState } from "react"
 import { isApiError } from "../api/types"
 
-export type PhotoLoad = (photoId: string) => Promise<Blob>
+export type PhotoLoad = (photoId: string, signal: AbortSignal) => Promise<Blob>
 
 type Phase =
   | { kind: "loading" }
@@ -19,6 +19,10 @@ export function classifyPhotoError(error: unknown): "missing" | "failed" {
 
 function acceptedImage(blob: Blob): boolean {
   return IMAGE_TYPES.has(blob.type.toLowerCase()) && blob.size > 0
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error && (error as { name: unknown }).name === "AbortError"
 }
 
 export function PhotoEntry({
@@ -63,10 +67,11 @@ export function PhotoDialog({
   const [phase, setPhase] = useState<Phase>({ kind: "loading" })
 
   useEffect(() => {
+    const controller = new AbortController()
     let cancelled = false
     let url: string | null = null
     setPhase({ kind: "loading" })
-    loadPhoto(photoId).then(
+    loadPhoto(photoId, controller.signal).then(
       (blob) => {
         if (cancelled) return
         try {
@@ -86,13 +91,17 @@ export function PhotoDialog({
         }
       },
       (error: unknown) => {
-        if (cancelled) return
+        if (cancelled || isAbortError(error)) return
         setPhase({ kind: classifyPhotoError(error) })
       },
     )
     return () => {
       cancelled = true
-      if (url) URL.revokeObjectURL(url)
+      controller.abort()
+      if (url) {
+        URL.revokeObjectURL(url)
+        url = null
+      }
     }
   }, [attempt, loadPhoto, photoId])
 

@@ -156,6 +156,35 @@ describe("api client", () => {
     expect(seen[0]?.url).not.toContain("purge")
   })
 
+  it("aborts an in-flight photo GET and keeps the abort error", async () => {
+    const controller = new AbortController()
+    let seenSignal: AbortSignal | undefined
+    const api = createClient({
+      fetch: (url, init) => new Promise((_resolve, reject) => {
+        expect(url).toBe("/api/v1/photos/11111111-1111-4111-8111-111111111111")
+        expect(init?.method).toBe("GET")
+        expect(init?.credentials).toBe("include")
+        expect(new Headers(init?.headers).get("Authorization")).toBeNull()
+        seenSignal = init?.signal ?? undefined
+        const signal = init?.signal
+        if (!signal) {
+          reject(new Error("missing signal"))
+          return
+        }
+        signal.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"))
+        }, { once: true })
+      }),
+    })
+    const pending = api.photo("11111111-1111-4111-8111-111111111111", controller.signal)
+    expect(seenSignal).toBe(controller.signal)
+    expect(seenSignal?.aborted).toBe(false)
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    await expect(pending).rejects.not.toMatchObject({ message: "当前无网络，请稍后重试" })
+    expect(seenSignal?.aborted).toBe(true)
+  })
+
   it("encodes the photo id into one path segment", async () => {
     let url = ""
     const api = createClient({

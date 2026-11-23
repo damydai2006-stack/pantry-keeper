@@ -253,7 +253,7 @@ export function ItemScreen({
   const undoLocked = !connected || undoing || busy || submitting
   const loadPhotoRef = useRef(onLoadPhoto)
   loadPhotoRef.current = onLoadPhoto
-  const loadPhoto = useCallback((photoId: string) => loadPhotoRef.current(photoId), [])
+  const loadPhoto = useCallback((photoId: string, signal: AbortSignal) => loadPhotoRef.current(photoId, signal), [])
 
   function openPhoto(item: Item) {
     const photoId = item.photo_id?.trim() ?? ""

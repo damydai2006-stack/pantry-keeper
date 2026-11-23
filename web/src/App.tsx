@@ -206,7 +206,7 @@ export function App({
         onRestore={async (ids) => { await changeItems(ids, "restore") }}
         onDeleteHistory={async (ids) => { await changeItems(ids, "delete") }}
         onLogout={logout}
-        onLoadPhoto={(photoId) => api.photo(photoId)}
+        onLoadPhoto={(photoId, signal) => api.photo(photoId, signal)}
       />
     )
   }
