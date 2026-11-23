@@ -121,6 +121,9 @@ describe("in-stock batch mark", () => {
         family: family(),
         notify_time: "09:00",
       }),
+      photo: async () => {
+        throw new Error("photo unused")
+      },
       webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
     } satisfies PantryClient
     renderApp(api)
@@ -203,6 +206,9 @@ describe("in-stock batch mark", () => {
         family: family(),
         notify_time: "09:00",
       }),
+      photo: async () => {
+        throw new Error("photo unused")
+      },
       webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
     } satisfies PantryClient
     renderApp(api)
@@ -252,6 +258,9 @@ describe("in-stock batch mark", () => {
         family: family(),
         notify_time: "09:00",
       }),
+      photo: async () => {
+        throw new Error("photo unused")
+      },
       webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
     } satisfies PantryClient
     renderApp(api)

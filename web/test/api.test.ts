@@ -129,6 +129,83 @@ describe("api client", () => {
     expect(seen.some((call) => call.url.includes("purge"))).toBe(false)
   })
 
+  it("reads a photo with the session cookie and does not attach a token or query secret", async () => {
+    const seen: { url: string; init: RequestInit }[] = []
+    const bytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xd9])
+    const api = createClient({
+      baseUrl: "http://127.0.0.1:18280",
+      fetch: async (url, init) => {
+        seen.push({ url, init: init ?? {} })
+        return new Response(bytes, { status: 200, headers: { "content-type": "image/jpeg" } })
+      },
+    })
+    const blob = await api.photo("11111111-1111-4111-8111-111111111111")
+    expect(blob.type).toBe("image/jpeg")
+    expect(blob.size).toBe(bytes.byteLength)
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.url).toBe("http://127.0.0.1:18280/api/v1/photos/11111111-1111-4111-8111-111111111111")
+    expect(seen[0]?.init.method).toBe("GET")
+    expect(seen[0]?.init.credentials).toBe("include")
+    expect(seen[0]?.init.body).toBeUndefined()
+    const headers = new Headers(seen[0]?.init.headers)
+    expect(headers.get("Authorization")).toBeNull()
+    expect(headers.get("X-Pantry-Request")).toBeNull()
+    expect(seen[0]?.url).not.toContain("token")
+    expect(seen[0]?.url).not.toContain("?")
+    expect(seen[0]?.url).not.toContain("thumb")
+    expect(seen[0]?.url).not.toContain("purge")
+  })
+
+  it("encodes the photo id into one path segment", async () => {
+    let url = ""
+    const api = createClient({
+      fetch: async (input) => {
+        url = input
+        return new Response(Uint8Array.from([1, 2, 3, 4]), {
+          status: 200,
+          headers: { "content-type": "image/webp" },
+        })
+      },
+    })
+    const blob = await api.photo("abc/def token")
+    expect(blob.type).toBe("image/webp")
+    expect(url).toBe("/api/v1/photos/abc%2Fdef%20token")
+  })
+
+  it("maps a missing photo to not_found and rejects a non-image body", async () => {
+    const missing = createClient({
+      fetch: async () => new Response(JSON.stringify({ error: "not_found", message: "未找到" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      }),
+    })
+    await expect(missing.photo("gone")).rejects.toMatchObject({ status: 404, code: "not_found", message: "未找到" })
+    const html = createClient({
+      fetch: async () => new Response("<html>nope</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    })
+    await expect(html.photo("gone")).rejects.toMatchObject({ code: "unsupported_photo" })
+    const empty = createClient({
+      fetch: async () => new Response(new Uint8Array(), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
+    })
+    await expect(empty.photo("gone")).rejects.toMatchObject({ code: "unsupported_photo" })
+    const offline = createClient({
+      fetch: async () => {
+        throw new TypeError("Failed to fetch")
+      },
+    })
+    await expect(offline.photo("gone")).rejects.toBeInstanceOf(TypeError)
+    const failed = createClient({
+      fetch: async () => new Response(JSON.stringify({ error: "http", message: "请求失败" }), { status: 500 }),
+    })
+    await expect(failed.photo("gone")).rejects.toMatchObject({ status: 500, code: "http", message: "请求失败" })
+  })
+
   it("builds a same-origin socket url and does not invent a public host", () => {
     expect(webSocketUrl("")).toMatch(/^ws:\/\/.+\/api\/v1\/ws$/)
     expect(webSocketUrl("https://127.0.0.1:8443")).toBe("wss://127.0.0.1:8443/api/v1/ws")

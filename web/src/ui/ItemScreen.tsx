@@ -1,9 +1,10 @@
 import { Button, Checkbox, Input, Modal } from "antd"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { isApiError, type Item } from "../api/types"
 import { basisLabel, categoryLabel, groupItems, itemDaysLabel, itemEffectiveExpiry, listBucket } from "../domain/labels"
 import { HistoryPanel } from "./HistoryPanel"
 import { ItemForm } from "./ItemForm"
+import { PhotoDialog, PhotoEntry, type PhotoLoad } from "./PhotoView"
 
 type StockAction = "used_up" | "discarded"
 
@@ -81,6 +82,9 @@ export function ItemScreen({
   onLogout,
   accountName = "",
   online,
+  onLoadPhoto = async () => {
+    throw new TypeError("当前无网络，请稍后重试")
+  },
 }: {
   familyName: string
   inviteCode: string | null
@@ -103,6 +107,7 @@ export function ItemScreen({
   onLogout: () => Promise<void>
   accountName?: string
   online?: boolean
+  onLoadPhoto?: PhotoLoad
 }) {
   const connected = useOnlineFlag(online)
   const [query, setQuery] = useState("")
@@ -116,6 +121,7 @@ export function ItemScreen({
   const [undoOffer, setUndoOffer] = useState<UndoOffer | null>(null)
   const [undoing, setUndoing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [viewing, setViewing] = useState<{ name: string; photoId: string } | null>(null)
   const submittingRef = useRef(false)
   const undoingRef = useRef(false)
   const undoSerial = useRef(0)
@@ -245,6 +251,15 @@ export function ItemScreen({
   }
 
   const undoLocked = !connected || undoing || busy || submitting
+  const loadPhotoRef = useRef(onLoadPhoto)
+  loadPhotoRef.current = onLoadPhoto
+  const loadPhoto = useCallback((photoId: string) => loadPhotoRef.current(photoId), [])
+
+  function openPhoto(item: Item) {
+    const photoId = item.photo_id?.trim() ?? ""
+    if (!photoId) return
+    setViewing({ name: item.name, photoId })
+  }
 
   return (
     <section className="shell">
@@ -292,6 +307,7 @@ export function ItemScreen({
           online={online}
           onRestore={onRestore}
           onDelete={onDeleteHistory}
+          onViewPhoto={openPhoto}
         />
       ) : null}
       {view === "list" ? (
@@ -325,6 +341,9 @@ export function ItemScreen({
             const message = await onUpdate(id, rev, fields)
             if (message) setNotice(message)
             return message
+          }}
+          onViewPhoto={() => {
+            if (editing !== null && editing !== "new") openPhoto(editing)
           }}
         />
       ) : null}
@@ -362,6 +381,9 @@ export function ItemScreen({
                     {categoryLabel(item.category)} · 数量 {item.quantity}
                     {item.location ? ` · ${item.location}` : ""} · 到期 {item.expiry_date}
                     {effective !== item.expiry_date ? ` · 有效到期 ${effective}` : ""} · {basisLabel(item.expiry_basis)}
+                  </div>
+                  <div className="row">
+                    <PhotoEntry name={item.name} photoId={item.photo_id} onOpen={() => openPhoto(item)} />
                   </div>
                   <div className="row">
                     <Button onClick={() => setEditing(item)}>编辑</Button>
@@ -428,6 +450,15 @@ export function ItemScreen({
       </>
       ) : null}
       </div>
+      {viewing ? (
+        <PhotoDialog
+          key={viewing.photoId}
+          name={viewing.name}
+          photoId={viewing.photoId}
+          loadPhoto={loadPhoto}
+          onClose={() => setViewing(null)}
+        />
+      ) : null}
     </section>
   )
 }

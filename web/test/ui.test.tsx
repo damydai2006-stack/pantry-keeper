@@ -71,6 +71,9 @@ function client(partial: Partial<PantryClient>): PantryClient {
       throw new Error("this screen does not undo")
     },
     sync: async () => ({ reset: false, rev: 1, items: [], tombstones: [], family: family(), notify_time: "09:00" }),
+    photo: async () => {
+      throw new Error("photo unused")
+    },
     webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
     ...partial,
   }

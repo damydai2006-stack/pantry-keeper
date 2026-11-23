@@ -3,6 +3,7 @@ import { useMemo, useState } from "react"
 import { createBody, draftFromItem, emptyDraft, patchFields, previewDraft, CATEGORIES, LOCATIONS, SHELF_PRESETS, TIER_OPTIONS, type ItemDraft } from "../domain/draft"
 import type { Item } from "../api/types"
 import { takeCodePoints } from "../domain/text"
+import { PhotoEntry } from "./PhotoView"
 
 // The save baseline is the opened id and rev. A different item, a new item, or a newer
 // revision has to start from that row; a list refresh alone does not change it.
@@ -17,6 +18,7 @@ export function ItemForm({
   onCancel,
   onCreate,
   onUpdate,
+  onViewPhoto,
 }: {
   today: string
   editing: Item | null
@@ -24,6 +26,7 @@ export function ItemForm({
   onCancel: () => void
   onCreate: (body: Record<string, unknown>) => Promise<void>
   onUpdate: (id: string, baseRev: number, fields: Record<string, unknown>) => Promise<string | null>
+  onViewPhoto?: () => void
 }) {
   const identity = formIdentity(editing)
   const [draft, setDraft] = useState<ItemDraft>(() => (editing ? draftFromItem(editing) : emptyDraft()))
@@ -70,6 +73,10 @@ export function ItemForm({
   return (
     <section className="panel form-grid" aria-label={editing ? "编辑物品" : "新增物品"}>
       <h2>{editing ? "编辑物品" : "新增物品"}</h2>
+      <div>
+        照片
+        <PhotoEntry name={editing?.name ?? "物品"} photoId={editing?.photo_id} onOpen={() => onViewPhoto?.()} />
+      </div>
       <label>
         名称
         <Input

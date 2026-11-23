@@ -26,6 +26,7 @@ export type PantryClient = {
   batch(ids: string[], action: string): Promise<{ undo_token?: string | null; rev: number }>
   undoBatch(undoToken: string): Promise<{ skipped: number; restored: number; message?: string | null }>
   sync(since: number): Promise<SyncPage>
+  photo(id: string): Promise<Blob>
   webSocketUrl(): string
 }
 
@@ -88,8 +89,37 @@ export function createClient(options: { baseUrl?: string; fetch?: FetchLike } = 
       return { skipped: body?.skipped ?? 0, restored: body?.restored ?? 0, message: body?.message ?? null }
     },
     sync: async (since) => normalizeSync(await request<Partial<SyncPage>>("GET", `/api/v1/sync?since=${since}`)),
+    photo: (id) => readPhoto(fetchImpl, baseUrl, id),
     webSocketUrl: () => webSocketUrl(baseUrl),
   }
+}
+
+const PHOTO_TYPES = new Set(["image/jpeg", "image/webp"])
+
+// GET uses the existing cookie session. The photo id stays in this request only:
+// no bearer token, no query secret, and the caller renders a blob URL.
+async function readPhoto(fetchImpl: FetchLike, baseUrl: string, id: string): Promise<Blob> {
+  const headers = new Headers()
+  headers.set("Accept", "image/jpeg, image/webp, application/json")
+  let response: Response
+  try {
+    response = await fetchImpl(`${baseUrl}/api/v1/photos/${encodeURIComponent(id)}`, {
+      method: "GET",
+      headers,
+      credentials: "include",
+    })
+  } catch (error) {
+    if (error instanceof TypeError) throw error
+    throw new TypeError("当前无网络，请稍后重试")
+  }
+  if (!response.ok) throw parseError(response.status, await response.text())
+  const headerType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? ""
+  const blob = await response.blob()
+  const type = (blob.type || headerType).toLowerCase()
+  if (!PHOTO_TYPES.has(type) || blob.size === 0) {
+    throw new ApiError(response.status || 200, "unsupported_photo", "照片加载失败")
+  }
+  return blob.type.toLowerCase() === type ? blob : new Blob([await blob.arrayBuffer()], { type })
 }
 
 export function webSocketUrl(baseUrl: string): string {
