@@ -84,6 +84,28 @@ describe("api client", () => {
     expect(page.family?.id).toBe("fam-1")
   })
 
+  it("posts used_up and discarded batches as ids and action only", async () => {
+    const seen: { url: string; method: string; body: string; csrf: string | null }[] = []
+    const api = createClient({
+      fetch: async (url, init) => {
+        seen.push({
+          url,
+          method: init?.method ?? "",
+          body: String(init?.body ?? ""),
+          csrf: new Headers(init?.headers).get("X-Pantry-Request"),
+        })
+        return new Response(JSON.stringify({ undo_token: "batch-token", rev: 4 }), { status: 200 })
+      },
+    })
+    expect(await api.batch(["milk", "sauce"], "used_up")).toEqual({ undo_token: "batch-token", rev: 4 })
+    expect(await api.batch(["sauce"], "discarded")).toEqual({ undo_token: "batch-token", rev: 4 })
+    expect(seen.map((call) => call.url)).toEqual(["/api/v1/items/batch", "/api/v1/items/batch"])
+    expect(seen[0]?.body).toBe(JSON.stringify({ ids: ["milk", "sauce"], action: "used_up" }))
+    expect(seen[1]?.body).toBe(JSON.stringify({ ids: ["sauce"], action: "discarded" }))
+    expect(seen.every((call) => call.method === "POST" && call.csrf === "1")).toBe(true)
+    expect(seen.some((call) => call.url.includes("undo") || call.url.includes("purge"))).toBe(false)
+  })
+
   it("builds a same-origin socket url and does not invent a public host", () => {
     expect(webSocketUrl("")).toMatch(/^ws:\/\/.+\/api\/v1\/ws$/)
     expect(webSocketUrl("https://127.0.0.1:8443")).toBe("wss://127.0.0.1:8443/api/v1/ws")

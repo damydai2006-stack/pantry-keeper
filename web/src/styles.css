@@ -62,7 +62,16 @@ button, input, select, textarea { font: inherit; }
 
 .history-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
-.history-actions .ant-btn { min-height: 48px; }
+.history-actions .ant-btn,
+.stock-batch .ant-btn { min-height: 48px; }
+
+.stock-check {
+  display: inline-flex;
+  min-width: 48px;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+}
 
 .brand {
   display: flex;
