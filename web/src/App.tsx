@@ -129,10 +129,10 @@ export function App({
     }
   }
 
-  async function changeItems(id: string, action: string) {
+  async function changeItems(ids: string[], action: string) {
     setBusy(true)
     try {
-      await api.batch([id], action)
+      await api.batch(ids, action)
       await sync.refresh().catch(() => undefined)
     } catch (error) {
       throw new Error(userMessage(error))
@@ -178,8 +178,11 @@ export function App({
         onRefresh={async () => { await sync.refresh().catch(() => undefined) }}
         onCreate={createItem}
         onUpdate={updateItem}
-        onDelete={(id) => changeItems(id, "delete")}
-        onUsed={(id) => changeItems(id, "used_up")}
+        accountName={me.data.display_name}
+        onDelete={(id) => changeItems([id], "delete")}
+        onUsed={(id) => changeItems([id], "used_up")}
+        onRestore={(ids) => changeItems(ids, "restore")}
+        onDeleteHistory={(ids) => changeItems(ids, "delete")}
         onLogout={logout}
       />
     )
@@ -191,7 +194,7 @@ export function App({
       button={{ autoInsertSpace: false }}
       theme={{ token: { colorPrimary: "#1e4a62", colorError: "#9b1c1c", borderRadius: 12, fontSize: 16 } }}
     >
-      <main className="app">{body}</main>
+      <main className={me.data && familyId && !sync.removed ? "app" : "app app-narrow"}>{body}</main>
     </ConfigProvider>
   )
 }

@@ -2,6 +2,7 @@ import { Button, Input, Modal } from "antd"
 import { useMemo, useState } from "react"
 import type { Item } from "../api/types"
 import { basisLabel, categoryLabel, groupItems, itemDaysLabel, itemEffectiveExpiry, listBucket } from "../domain/labels"
+import { HistoryPanel } from "./HistoryPanel"
 import { ItemForm } from "./ItemForm"
 
 export function ItemScreen({
@@ -19,7 +20,11 @@ export function ItemScreen({
   onUpdate,
   onDelete,
   onUsed,
+  onRestore = async () => undefined,
+  onDeleteHistory = async () => undefined,
   onLogout,
+  accountName = "",
+  online,
 }: {
   familyName: string
   inviteCode: string | null
@@ -35,9 +40,14 @@ export function ItemScreen({
   onUpdate: (id: string, baseRev: number, fields: Record<string, unknown>) => Promise<string | null>
   onDelete: (id: string) => Promise<void>
   onUsed: (id: string) => Promise<void>
+  onRestore?: (ids: string[]) => Promise<void>
+  onDeleteHistory?: (ids: string[]) => Promise<void>
   onLogout: () => Promise<void>
+  accountName?: string
+  online?: boolean
 }) {
   const [query, setQuery] = useState("")
+  const [view, setView] = useState<"list" | "history">("list")
   const [editing, setEditing] = useState<Item | null | "new">(null)
   const [pendingDelete, setPendingDelete] = useState<Item | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -45,7 +55,20 @@ export function ItemScreen({
   const stock = items.filter((item) => item.status === "in_stock")
 
   return (
-    <section className="stack">
+    <section className="shell">
+      <aside className="side">
+        <div className="brand-name">大米保质期</div>
+        <nav className="side-nav" aria-label="网页导航">
+          <Button type={view === "list" ? "primary" : "default"} aria-current={view === "list" ? "page" : undefined} onClick={() => setView("list")}>
+            清单
+          </Button>
+          <Button type={view === "history" ? "primary" : "default"} aria-current={view === "history" ? "page" : undefined} onClick={() => setView("history")}>
+            历史
+          </Button>
+        </nav>
+        {accountName ? <div className="muted">{accountName}</div> : null}
+      </aside>
+      <div className="stack">
       <div className="row spread">
         <div>
           <h1>{familyName || "家庭清单"}</h1>
@@ -70,6 +93,17 @@ export function ItemScreen({
       ) : null}
       {error ? <div role="alert">{error}</div> : null}
       {notice ? <div role="status">{notice}</div> : null}
+      {view === "history" ? (
+        <HistoryPanel
+          items={items}
+          busy={busy}
+          online={online}
+          onRestore={onRestore}
+          onDelete={onDeleteHistory}
+        />
+      ) : null}
+      {view === "list" ? (
+      <>
       <div className="row">
         <Input aria-label="搜索物品" value={query} placeholder="搜索名称" onChange={(event) => setQuery(event.target.value)} />
         <Button type="primary" onClick={() => setEditing("new")}>新增物品</Button>
@@ -140,6 +174,9 @@ export function ItemScreen({
       >
         永久删除，不可恢复。想留记录可以改用「已用完」。
       </Modal>
+      </>
+      ) : null}
+      </div>
     </section>
   )
 }

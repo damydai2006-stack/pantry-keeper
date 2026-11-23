@@ -39,6 +39,7 @@ export type Item = {
   reminder_tiers: string[]
   status: string
   photo_id?: string | null
+  status_changed_at?: string | null
   rev: number
 }
 

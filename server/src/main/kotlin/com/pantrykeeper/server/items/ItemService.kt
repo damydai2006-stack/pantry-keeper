@@ -723,6 +723,7 @@ data class ItemRow(
         reminderTiers = tiers,
         status = status,
         photoId = photoId?.toString(),
+        statusChangedAt = statusChangedAt?.toString(),
         rev = rev,
     )
 
@@ -767,6 +768,7 @@ data class ItemDto(
     val reminderTiers: List<String>,
     val status: String,
     val photoId: String? = null,
+    val statusChangedAt: String? = null,
     val rev: Long,
 )
 

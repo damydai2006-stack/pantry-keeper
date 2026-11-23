@@ -12,10 +12,57 @@ body { margin: 0; }
 button, input, select, textarea { font: inherit; }
 
 .app {
-  max-width: 960px;
   margin: 0 auto;
   padding: 16px 16px 32px;
 }
+
+.app-narrow { max-width: 960px; }
+
+.shell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.side {
+  background: #fff;
+  border-radius: 16px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.brand-name { font-size: 22px; font-weight: 700; }
+
+.side-nav { display: flex; flex-direction: column; gap: 8px; }
+
+.side-nav .ant-btn { min-height: 48px; }
+
+.history-wrap {
+  overflow-x: auto;
+  background: #fff;
+  border-radius: 16px;
+}
+
+.history-table { width: 100%; border-collapse: collapse; }
+
+.history-table th,
+.history-table td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #d4cfc5;
+  vertical-align: middle;
+}
+
+.history-table th { font-weight: 700; }
+
+.history-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.history-actions .ant-btn { min-height: 48px; }
 
 .brand {
   display: flex;
@@ -75,6 +122,11 @@ h1, h2, h3 { margin: 0; }
 .center { min-height: 50vh; display: grid; place-items: center; }
 
 .form-grid { display: grid; gap: 8px; }
+
+@media (max-width: 1279px) {
+  .shell { grid-template-columns: 1fr; }
+  .side-nav { flex-direction: row; }
+}
 
 @media (max-width: 640px) {
   .app { padding: 12px 12px 24px; }
