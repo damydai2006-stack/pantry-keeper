@@ -110,6 +110,9 @@ describe("web history restore", () => {
         }
         return { rev: 8 }
       },
+      undoBatch: async () => {
+        throw new Error("history restore must not call batch undo")
+      },
       sync: async () => ({
         reset: false,
         rev: 8,
@@ -171,6 +174,9 @@ describe("web history restore", () => {
           }
         }
         return { rev: 9 }
+      },
+      undoBatch: async () => {
+        throw new Error("history restore must not call batch undo")
       },
       sync: async () => ({
         reset: false,

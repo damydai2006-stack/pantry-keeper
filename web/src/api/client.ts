@@ -24,6 +24,7 @@ export type PantryClient = {
   createItem(body: Record<string, unknown>): Promise<Item>
   patchItem(id: string, baseRev: number, fields: Record<string, unknown>): Promise<PatchResult>
   batch(ids: string[], action: string): Promise<{ undo_token?: string | null; rev: number }>
+  undoBatch(undoToken: string): Promise<{ skipped: number; restored: number; message?: string | null }>
   sync(since: number): Promise<SyncPage>
   webSocketUrl(): string
 }
@@ -78,6 +79,14 @@ export function createClient(options: { baseUrl?: string; fetch?: FetchLike } = 
     createItem: (body) => request("POST", "/api/v1/items", body),
     patchItem: (id, baseRev, fields) => request("PATCH", `/api/v1/items/${id}`, { base_rev: baseRev, fields }),
     batch: (ids, action) => request("POST", "/api/v1/items/batch", { ids, action }),
+    undoBatch: async (undoToken) => {
+      const body = await request<{ skipped?: number; restored?: number; message?: string | null }>(
+        "POST",
+        "/api/v1/items/batch/undo",
+        { undo_token: undoToken },
+      )
+      return { skipped: body?.skipped ?? 0, restored: body?.restored ?? 0, message: body?.message ?? null }
+    },
     sync: async (since) => normalizeSync(await request<Partial<SyncPage>>("GET", `/api/v1/sync?since=${since}`)),
     webSocketUrl: () => webSocketUrl(baseUrl),
   }

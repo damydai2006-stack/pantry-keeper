@@ -67,6 +67,9 @@ function client(partial: Partial<PantryClient>): PantryClient {
     createItem: async () => milk(),
     patchItem: async () => ({ item: milk(), overwritten: [], message: null }),
     batch: async () => ({ rev: 4 }),
+    undoBatch: async () => {
+      throw new Error("this screen does not undo")
+    },
     sync: async () => ({ reset: false, rev: 1, items: [], tombstones: [], family: family(), notify_time: "09:00" }),
     webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
     ...partial,
