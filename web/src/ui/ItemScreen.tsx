@@ -1,6 +1,6 @@
 import { Button, Checkbox, Input, Modal } from "antd"
 import { useEffect, useMemo, useRef, useState } from "react"
-import type { Item } from "../api/types"
+import { isApiError, type Item } from "../api/types"
 import { basisLabel, categoryLabel, groupItems, itemDaysLabel, itemEffectiveExpiry, listBucket } from "../domain/labels"
 import { HistoryPanel } from "./HistoryPanel"
 import { ItemForm } from "./ItemForm"
@@ -48,7 +48,13 @@ function markedNotice(action: StockAction, count: number): string {
   return `已将 ${count} 件标记为${verb}，已移入历史`
 }
 
+function batchWasRejected(caught: unknown): boolean {
+  if (isApiError(caught)) return true
+  return typeof caught === "object" && caught !== null && (caught as { batchRejected?: boolean }).batchRejected === true
+}
+
 function atomicNotice(caught: unknown): string {
+  if (!batchWasRejected(caught)) return "结果未确认，请刷新"
   const message = caught instanceof Error && caught.message ? caught.message : "操作失败"
   return `这批没有改动，物品仍在库：${message}`
 }
@@ -135,6 +141,7 @@ export function ItemScreen({
     const timer = window.setInterval(() => {
       setUndoOffer((current) => {
         if (!current || current.token !== token || current.startedAt !== startedAt) return current
+        if (undoingRef.current && current.seconds <= 1) return current
         if (current.seconds <= 1) return null
         return { ...current, seconds: current.seconds - 1 }
       })
@@ -218,13 +225,22 @@ export function ItemScreen({
         setListNotice(null)
       }
     } catch (caught) {
-      undoingRef.current = false
-      setUndoing(false)
       const message = caught instanceof Error && caught.message ? caught.message : "操作失败"
       setListNotice(message)
       if (message.includes("超过时限")) {
-        setUndoOffer((offer) => offer?.token === current.token ? null : offer)
+        setUndoOffer((offer) => (
+          offer?.token === current.token && offer.startedAt === current.startedAt ? null : offer
+        ))
+      } else {
+        setUndoOffer((offer) => {
+          if (offer && (offer.token !== current.token || offer.startedAt !== current.startedAt)) return offer
+          if (offer && offer.seconds > 1) return offer
+          undoSerial.current += 1
+          return { ...current, seconds: UNDO_SECONDS, startedAt: undoSerial.current }
+        })
       }
+      undoingRef.current = false
+      setUndoing(false)
     }
   }
 
@@ -355,7 +371,16 @@ export function ItemScreen({
                     >
                       已用完
                     </Button>
-                    <Button danger onClick={() => setPendingDelete(item)}>删除</Button>
+                    <Button
+                      danger
+                      disabled={!connected}
+                      onClick={() => {
+                        if (!connected) return
+                        setPendingDelete(item)
+                      }}
+                    >
+                      删除
+                    </Button>
                   </div>
                 </li>
               )
@@ -370,15 +395,20 @@ export function ItemScreen({
         title="永久删除"
         okText="删除"
         cancelText="取消"
-        okButtonProps={{ danger: true }}
+        okButtonProps={{ danger: true, disabled: !connected }}
         onCancel={() => setPendingDelete(null)}
         onOk={() => {
+          if (!connected) {
+            setNotice("恢复网络后再修改")
+            return
+          }
           const target = pendingDelete
           setPendingDelete(null)
           if (target) void onDelete(target.id).catch((caught: unknown) => setNotice(caught instanceof Error ? caught.message : "操作失败"))
         }}
       >
         永久删除，不可恢复。想留记录可以改用「已用完」。
+        {!connected ? <div role="status">恢复网络后再修改</div> : null}
       </Modal>
       {undoOffer ? (
         <div className="undo-bar" style={{ backgroundColor: "#1a1d1a", color: "#ffffff" }}>

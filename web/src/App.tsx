@@ -136,7 +136,9 @@ export function App({
       await sync.refresh().catch(() => undefined)
       return result
     } catch (error) {
-      throw new Error(userMessage(error))
+      const wrapped = new Error(userMessage(error))
+      if (isApiError(error)) Object.assign(wrapped, { batchRejected: true })
+      throw wrapped
     } finally {
       setBusy(false)
     }

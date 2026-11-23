@@ -339,6 +339,58 @@ describe("undo bar boundaries", () => {
     expect(view.marks).toEqual([{ ids: ["sauce"], action: "discarded" }])
   })
 
+  it("keeps a retry after the countdown ends during an undo that was not rejected as expired", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] })
+    const user = userEvent.setup()
+    const view = renderList(true)
+    let rejectPending: (reason: Error) => void = () => undefined
+    const pending = new Promise<{ skipped: number; restored: number; message: null }>((_resolve, reject) => {
+      rejectPending = reject
+    })
+    let attempts = 0
+    view.setUndo(() => {
+      attempts += 1
+      return pending
+    })
+    await markOne(user, "牛奶", "已用完")
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }))
+    expect(attempts).toBe(1)
+    act(() => { vi.advanceTimersByTime(5000) })
+    expect(screen.getByRole("button", { name: "撤销" })).toBeDisabled()
+    expect(screen.getByText("已将 1 件标记为已用完，已移入历史")).toBeInTheDocument()
+    await act(async () => { rejectPending(new Error("当前无网络，请稍后重试")) })
+    expect(await screen.findByText("当前无网络，请稍后重试")).toBeInTheDocument()
+    const retry = screen.getByRole("button", { name: "撤销" })
+    expect(retry).toBeEnabled()
+    expect(undoBar()).toHaveTextContent("5 秒")
+    view.setUndo(async () => {
+      attempts += 1
+      return { skipped: 0, restored: 1, message: null }
+    })
+    await user.click(retry)
+    await waitFor(() => expect(attempts).toBe(2))
+    await waitFor(() => expect(screen.queryByRole("button", { name: "撤销" })).toBeNull())
+  })
+
+  it("still closes the undo bar when the server says the undo window has expired", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] })
+    const user = userEvent.setup()
+    const view = renderList(true)
+    let rejectPending: (reason: Error) => void = () => undefined
+    const pending = new Promise<{ skipped: number; restored: number; message: null }>((_resolve, reject) => {
+      rejectPending = reject
+    })
+    view.setUndo(() => pending)
+    await markOne(user, "牛奶", "已用完")
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }))
+    act(() => { vi.advanceTimersByTime(5000) })
+    expect(screen.getByRole("button", { name: "撤销" })).toBeInTheDocument()
+    await act(async () => { rejectPending(new Error("撤销已超过时限")) })
+    expect(await screen.findByText("撤销已超过时限")).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole("button", { name: "撤销" })).toBeNull())
+    expect(view.undos).toEqual([])
+  })
+
   it("does not show an undo bar for row delete or the single used-up action", async () => {
     const user = userEvent.setup()
     const view = renderList(true)
@@ -355,6 +407,29 @@ describe("undo bar boundaries", () => {
     expect(view.deletes).toEqual(["sauce"])
     expect(screen.queryByRole("button", { name: "撤销" })).toBeNull()
     expect(screen.queryByText(/已移入历史/)).toBeNull()
+  })
+
+  it("disables in-stock delete while offline and blocks a confirmation that loses the network", async () => {
+    const user = userEvent.setup()
+    const view = renderList(false)
+    const remove = within(card("牛奶")).getByRole("button", { name: "删除" })
+    expect(remove).toBeDisabled()
+    expect(within(card("牛奶")).getByRole("button", { name: "已用完" })).toBeDisabled()
+    fireEvent.click(remove)
+    expect(screen.queryByRole("dialog")).toBeNull()
+    expect(view.deletes).toEqual([])
+
+    view.rerender(true)
+    await user.click(within(card("牛奶")).getByRole("button", { name: "删除" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByRole("button", { name: "删除" })).toBeEnabled()
+    view.rerender(false)
+    const dropped = screen.getByRole("dialog")
+    expect(within(dropped).getByRole("button", { name: "删除" })).toBeDisabled()
+    expect(within(dropped).getByText("恢复网络后再修改")).toBeInTheDocument()
+    fireEvent.click(within(dropped).getByRole("button", { name: "删除" }))
+    expect(view.deletes).toEqual([])
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
   })
 
   it("keeps one in-flight undo, reports a failure, and closes the bar when the token has expired", async () => {
