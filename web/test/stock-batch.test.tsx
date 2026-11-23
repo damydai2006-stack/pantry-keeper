@@ -110,6 +110,9 @@ describe("in-stock batch mark", () => {
         }
         return { undo_token: "not-used", rev: 9 }
       },
+      undoBatch: async () => {
+        throw new Error("this test does not undo")
+      },
       sync: async () => ({
         reset: false,
         rev: 9,
@@ -135,13 +138,18 @@ describe("in-stock batch mark", () => {
     await waitFor(() => expect(batches).toEqual([{ ids: ["milk"], action: "used_up" }]))
     expect(patches).toBe(0)
     expect(rows[0]).toMatchObject({ status: "used_up", expiry_date: "2026-11-18", reminder_tiers: ["D30", "D5"] })
-    expect(await screen.findByText("已将 1 件标记为已用完，已移入历史")).toBeInTheDocument()
+    const usedNotice = await screen.findByText("已将 1 件标记为已用完，已移入历史")
+    const usedBar = usedNotice.closest(".undo-bar")
+    if (!usedBar) throw new Error("missing undo bar")
+    expect((usedBar as HTMLElement).style.backgroundColor).toBe("rgb(26, 29, 26)")
+    expect((usedBar as HTMLElement).style.color).toBe("rgb(255, 255, 255)")
+    expect(usedBar).toHaveTextContent("5 秒")
+    expect(within(usedBar as HTMLElement).getByRole("button", { name: "撤销" })).toBeEnabled()
+    expect(usedNotice).not.toHaveTextContent("撤销")
     expect(screen.queryByRole("heading", { name: "牛奶" })).toBeNull()
     expect(screen.getByRole("heading", { name: "酱油" })).toBeInTheDocument()
     expect(screen.queryByRole("checkbox")).toBeNull()
-    expect(screen.queryByRole("button", { name: "撤销" })).toBeNull()
     expect(screen.queryByRole("dialog")).toBeNull()
-    expect(screen.getByText("已将 1 件标记为已用完，已移入历史")).not.toHaveTextContent("撤销")
 
     await user.click(screen.getByRole("button", { name: "管理" }))
     await user.click(screen.getByRole("checkbox", { name: "选择酱油" }))
@@ -184,6 +192,9 @@ describe("in-stock batch mark", () => {
         batches.push({ ids: [...ids], action })
         throw new ApiError(404, "not_found", "未找到")
       },
+      undoBatch: async () => {
+        throw new Error("a rejected batch has no undo")
+      },
       sync: async () => ({
         reset: false,
         rev: 2,
@@ -209,6 +220,52 @@ describe("in-stock batch mark", () => {
     expect(screen.getByRole("checkbox", { name: "选择牛奶" })).toBeChecked()
     expect(screen.getByRole("checkbox", { name: "选择酱油" })).toBeChecked()
     expect(screen.queryByRole("button", { name: "撤销" })).toBeNull()
+  })
+
+  it("does not claim the batch stayed unchanged when the response is lost", async () => {
+    const user = userEvent.setup()
+    const rows = [
+      item({ id: "milk", name: "牛奶", status: "in_stock", expiry_date: "2026-11-14" }),
+      item({ id: "sauce", name: "酱油", status: "in_stock", expiry_date: "2026-12-20" }),
+    ]
+    const api = {
+      requestCode: async () => undefined,
+      login: async () => ({ user_id: "user-1", display_name: "用户" }),
+      logout: async () => undefined,
+      me: async () => me(),
+      createFamily: async () => family(),
+      joinFamily: async () => family(),
+      currentFamily: async () => family(),
+      createItem: async () => rows[0],
+      patchItem: async () => ({ item: rows[0], overwritten: [], message: null }),
+      batch: async () => {
+        throw new TypeError("Failed to fetch")
+      },
+      undoBatch: async () => {
+        throw new Error("a lost response has no undo")
+      },
+      sync: async () => ({
+        reset: false,
+        rev: 2,
+        items: rows,
+        tombstones: [],
+        family: family(),
+        notify_time: "09:00",
+      }),
+      webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
+    } satisfies PantryClient
+    renderApp(api)
+    await screen.findByRole("heading", { name: "牛奶" })
+    await user.click(screen.getByRole("button", { name: "管理" }))
+    await user.click(screen.getByRole("button", { name: "全选" }))
+    await user.click(within(screen.getByRole("toolbar", { name: "在库批量操作" })).getByRole("button", { name: "已用完" }))
+    expect(await screen.findByText("结果未确认，请刷新")).toBeInTheDocument()
+    expect(screen.queryByText(/这批没有改动/)).toBeNull()
+    expect(rows.map((row) => row.status)).toEqual(["in_stock", "in_stock"])
+    expect(screen.getByRole("heading", { name: "牛奶" })).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "酱油" })).toBeInTheDocument()
+    expect(screen.getByRole("checkbox", { name: "选择牛奶" })).toBeChecked()
+    expect(screen.getByRole("checkbox", { name: "选择酱油" })).toBeChecked()
   })
 })
 
@@ -318,6 +375,7 @@ describe("in-stock selection controls", () => {
     expect(screen.getByRole("status")).toHaveTextContent("恢复网络后再修改")
     expect(screen.getByRole("button", { name: "管理" })).toBeDisabled()
     expect(within(card("牛奶")).getByRole("button", { name: "已用完" })).toBeDisabled()
+    expect(within(card("牛奶")).getByRole("button", { name: "删除" })).toBeDisabled()
     expect(screen.queryByRole("checkbox")).toBeNull()
     expect(offline.marks).toEqual([])
     expect(offline.used).toEqual([])

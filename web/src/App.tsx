@@ -132,8 +132,28 @@ export function App({
   async function changeItems(ids: string[], action: string) {
     setBusy(true)
     try {
-      await api.batch(ids, action)
+      const result = await api.batch(ids, action)
       await sync.refresh().catch(() => undefined)
+      return result
+    } catch (error) {
+      const wrapped = new Error(userMessage(error))
+      if (isApiError(error)) Object.assign(wrapped, { batchRejected: true })
+      throw wrapped
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function undoItems(undoToken: string) {
+    setBusy(true)
+    try {
+      const result = await api.undoBatch(undoToken)
+      await sync.refresh().catch(() => undefined)
+      return {
+        skipped: result.skipped ?? 0,
+        restored: result.restored ?? 0,
+        message: result.message ?? null,
+      }
     } catch (error) {
       throw new Error(userMessage(error))
     } finally {
@@ -179,11 +199,12 @@ export function App({
         onCreate={createItem}
         onUpdate={updateItem}
         accountName={me.data.display_name}
-        onDelete={(id) => changeItems([id], "delete")}
-        onUsed={(id) => changeItems([id], "used_up")}
+        onDelete={async (id) => { await changeItems([id], "delete") }}
+        onUsed={async (id) => { await changeItems([id], "used_up") }}
         onMark={(ids, action) => changeItems(ids, action)}
-        onRestore={(ids) => changeItems(ids, "restore")}
-        onDeleteHistory={(ids) => changeItems(ids, "delete")}
+        onUndo={undoItems}
+        onRestore={async (ids) => { await changeItems(ids, "restore") }}
+        onDeleteHistory={async (ids) => { await changeItems(ids, "delete") }}
         onLogout={logout}
       />
     )
