@@ -181,6 +181,7 @@ export function App({
         accountName={me.data.display_name}
         onDelete={(id) => changeItems([id], "delete")}
         onUsed={(id) => changeItems([id], "used_up")}
+        onMark={(ids, action) => changeItems(ids, action)}
         onRestore={(ids) => changeItems(ids, "restore")}
         onDeleteHistory={(ids) => changeItems(ids, "delete")}
         onLogout={logout}
