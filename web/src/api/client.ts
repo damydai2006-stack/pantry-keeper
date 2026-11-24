@@ -21,6 +21,11 @@ export type PantryClient = {
   createFamily(name: string): Promise<Family>
   joinFamily(code: string): Promise<Family>
   currentFamily(): Promise<Family>
+  renameFamily(name: string): Promise<Family>
+  resetInvite(): Promise<Family>
+  transferAdmin(userId: string): Promise<Family>
+  removeMember(userId: string): Promise<void>
+  leaveFamily(): Promise<void>
   createItem(body: Record<string, unknown>): Promise<Item>
   patchItem(id: string, baseRev: number, fields: Record<string, unknown>): Promise<PatchResult>
   batch(ids: string[], action: string): Promise<{ undo_token?: string | null; rev: number }>
@@ -77,6 +82,11 @@ export function createClient(options: { baseUrl?: string; fetch?: FetchLike } = 
     createFamily: (name) => request("POST", "/api/v1/families", { name }),
     joinFamily: (code) => request("POST", "/api/v1/families/join", { code }),
     currentFamily: () => request("GET", "/api/v1/families/current"),
+    renameFamily: (name) => request("PATCH", "/api/v1/families/current", { name }),
+    resetInvite: () => request("POST", "/api/v1/families/current/invite/reset", {}),
+    transferAdmin: (userId) => request("POST", "/api/v1/families/current/admin", { user_id: userId }),
+    removeMember: (userId) => request("DELETE", `/api/v1/families/current/members/${encodeURIComponent(userId)}`),
+    leaveFamily: () => request("POST", "/api/v1/families/leave", {}),
     createItem: (body) => request("POST", "/api/v1/items", body),
     patchItem: (id, baseRev, fields) => request("PATCH", `/api/v1/items/${id}`, { base_rev: baseRev, fields }),
     batch: (ids, action) => request("POST", "/api/v1/items/batch", { ids, action }),

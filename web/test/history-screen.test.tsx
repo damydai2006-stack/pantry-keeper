@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 import { App } from "../src/App"
 import type { PantryClient } from "../src/api/client"
+import { unusedFamilyMethods } from "./family-methods"
 import type { Family, Item, Me } from "../src/api/types"
 import type { SocketLike } from "../src/sync/useFamilySync"
 import { ItemScreen } from "../src/ui/ItemScreen"
@@ -124,6 +125,7 @@ describe("web history restore", () => {
       photo: async () => {
         throw new Error("photo unused")
       },
+      ...unusedFamilyMethods(),
       webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
     } satisfies PantryClient
     renderApp(api)
@@ -192,6 +194,7 @@ describe("web history restore", () => {
       photo: async () => {
         throw new Error("photo unused")
       },
+      ...unusedFamilyMethods(),
       webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
     } satisfies PantryClient
     renderApp(api)

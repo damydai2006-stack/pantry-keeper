@@ -3,7 +3,7 @@ import zhCN from "antd/locale/zh_CN"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { createClient, type PantryClient } from "./api/client"
-import { isApiError, isUnauthorized, userMessage } from "./api/types"
+import { isApiError, isNotInFamily, isUnauthorized, userMessage, type Me } from "./api/types"
 import { todayForView } from "./domain/today"
 import { useFamilySync, type SocketLike } from "./sync/useFamilySync"
 import { FamilyPanel } from "./ui/FamilyPanel"
@@ -29,8 +29,9 @@ export function App({
   const [cookieNotice, setCookieNotice] = useState<string | null>(null)
   const [familyNotice, setFamilyNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [departed, setDeparted] = useState(false)
   if (me.isSuccess) hadSession.current = true
-  const familyId = me.data?.family_id ?? null
+  const familyId = departed ? null : (me.data?.family_id ?? null)
   const sync = useFamilySync(api, Boolean(familyId), socketFactory)
 
   useEffect(() => {
@@ -40,10 +41,10 @@ export function App({
   }, [sync.revoked, api, queryClient])
 
   useEffect(() => {
-    if (!sync.removed) return
+    if (!sync.removed || departed) return
     setFamilyNotice("你已被移出家庭")
     void queryClient.invalidateQueries({ queryKey: ["me", api] })
-  }, [sync.removed, api, queryClient])
+  }, [sync.removed, departed, api, queryClient])
 
   async function requestCode(phone: string) {
     try {
@@ -58,11 +59,23 @@ export function App({
     setCookieNotice(null)
     try {
       await api.login(phone, code)
+      setDeparted(false)
       const result = await me.refetch()
       if (result.error && isUnauthorized(result.error)) setCookieNotice(COOKIE_HINT)
     } finally {
       setBusy(false)
     }
+  }
+
+  async function confirmLeft() {
+    setDeparted(true)
+    setFamilyNotice(null)
+    sync.adoptFamily(null)
+    queryClient.setQueryData<Me>(["me", api], (current) => (
+      current ? { ...current, family_id: null } : current
+    ))
+    const result = await me.refetch()
+    if (result.data?.family_id) setDeparted(false)
   }
 
   async function logout() {
@@ -72,6 +85,7 @@ export function App({
       if (!isUnauthorized(error)) throw new Error(userMessage(error))
     }
     hadSession.current = false
+    setDeparted(false)
     setCookieNotice(null)
     setFamilyNotice(null)
     queryClient.clear()
@@ -81,10 +95,14 @@ export function App({
     setBusy(true)
     try {
       await api.createFamily(name)
+      setDeparted(false)
       setFamilyNotice(null)
       await me.refetch()
     } catch (error) {
-      if (isApiError(error) && error.code === "already_in_family") await me.refetch()
+      if (isApiError(error) && error.code === "already_in_family") {
+        setDeparted(false)
+        await me.refetch()
+      }
       throw new Error(userMessage(error))
     } finally {
       setBusy(false)
@@ -95,9 +113,98 @@ export function App({
     setBusy(true)
     try {
       await api.joinFamily(code)
+      setDeparted(false)
       setFamilyNotice(null)
       await me.refetch()
     } catch (error) {
+      throw new Error(userMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function settleFamilyError(error: unknown) {
+    if (isUnauthorized(error)) {
+      await me.refetch()
+      return
+    }
+    if (isNotInFamily(error)) {
+      await confirmLeft()
+      return
+    }
+    await sync.refresh().catch(() => undefined)
+  }
+
+  async function renameFamily(name: string) {
+    setBusy(true)
+    try {
+      sync.adoptFamily(await api.renameFamily(name))
+      await sync.refresh().catch(() => undefined)
+    } catch (error) {
+      await settleFamilyError(error)
+      throw new Error(userMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function resetInvite() {
+    setBusy(true)
+    try {
+      sync.adoptFamily(await api.resetInvite())
+      await sync.refresh().catch(() => undefined)
+    } catch (error) {
+      await settleFamilyError(error)
+      throw new Error(userMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function transferAdmin(userId: string) {
+    setBusy(true)
+    try {
+      sync.adoptFamily(await api.transferAdmin(userId))
+      await sync.refresh().catch(() => undefined)
+    } catch (error) {
+      await settleFamilyError(error)
+      throw new Error(userMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function removeMember(userId: string) {
+    setBusy(true)
+    try {
+      await api.removeMember(userId)
+      const latest = sync.family
+      if (latest) {
+        sync.adoptFamily({
+          ...latest,
+          members: latest.members.filter((member) => member.user_id !== userId),
+        })
+      }
+      await sync.refresh().catch(() => undefined)
+    } catch (error) {
+      await settleFamilyError(error)
+      throw new Error(userMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function leaveFamily() {
+    setBusy(true)
+    try {
+      await api.leaveFamily()
+      await confirmLeft()
+    } catch (error) {
+      if (isNotInFamily(error)) {
+        await confirmLeft()
+        return
+      }
+      await settleFamilyError(error)
       throw new Error(userMessage(error))
     } finally {
       setBusy(false)
@@ -163,7 +270,7 @@ export function App({
 
   let body
   if (me.isPending) body = <div role="status">正在加载</div>
-  else if (me.isError && !isUnauthorized(me.error)) {
+  else if (me.isError && !isUnauthorized(me.error) && !departed) {
     body = (
       <div className="stack">
         <div role="alert">{userMessage(me.error)}</div>
@@ -176,7 +283,7 @@ export function App({
   } else if (!familyId || sync.removed) {
     body = (
       <FamilyPanel
-        notice={sync.removed ? "你已被移出家庭" : familyNotice}
+        notice={sync.removed && !departed ? "你已被移出家庭" : familyNotice}
         busy={busy}
         onCreate={createFamily}
         onJoin={joinFamily}
@@ -207,6 +314,13 @@ export function App({
         onDeleteHistory={async (ids) => { await changeItems(ids, "delete") }}
         onLogout={logout}
         onLoadPhoto={(photoId, signal) => api.photo(photoId, signal)}
+        family={sync.family}
+        viewerId={me.data.user_id}
+        onRenameFamily={renameFamily}
+        onResetInvite={resetInvite}
+        onTransferAdmin={transferAdmin}
+        onRemoveMember={removeMember}
+        onLeaveFamily={leaveFamily}
       />
     )
   }

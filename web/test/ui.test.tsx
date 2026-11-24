@@ -64,6 +64,21 @@ function client(partial: Partial<PantryClient>): PantryClient {
     createFamily: async () => family(),
     joinFamily: async () => family(),
     currentFamily: async () => family(),
+    renameFamily: async () => {
+      throw new Error("family unused")
+    },
+    resetInvite: async () => {
+      throw new Error("family unused")
+    },
+    transferAdmin: async () => {
+      throw new Error("family unused")
+    },
+    removeMember: async () => {
+      throw new Error("family unused")
+    },
+    leaveFamily: async () => {
+      throw new Error("family unused")
+    },
     createItem: async () => milk(),
     patchItem: async () => ({ item: milk(), overwritten: [], message: null }),
     batch: async () => ({ rev: 4 }),

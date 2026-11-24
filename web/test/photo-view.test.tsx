@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest"
 import { App } from "../src/App"
 import { createClient, type FetchLike } from "../src/api/client"
 import type { PantryClient } from "../src/api/client"
+import { unusedFamilyMethods } from "./family-methods"
 import { ApiError, type Family, type Item, type Me } from "../src/api/types"
 import type { SocketLike } from "../src/sync/useFamilySync"
 import { ItemScreen } from "../src/ui/ItemScreen"
@@ -397,6 +398,7 @@ describe("read-only photo view", () => {
         seen.push(id)
         return jpeg()
       },
+      ...unusedFamilyMethods(),
       webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
     } satisfies PantryClient
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })

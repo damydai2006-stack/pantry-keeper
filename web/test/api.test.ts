@@ -235,6 +235,52 @@ describe("api client", () => {
     await expect(failed.photo("gone")).rejects.toMatchObject({ status: 500, code: "http", message: "请求失败" })
   })
 
+  it("updates the family with cookie writes and does not call purge or share", async () => {
+    const seen: { url: string; method: string; body: string; csrf: string | null; authorization: string | null; credentials: RequestCredentials | undefined }[] = []
+    const family = {
+      id: "fam-1",
+      name: "新家",
+      admin_user_id: "user-1",
+      invite_code: "AB23CD",
+      invite_expires_at: "2026-11-22T00:00:00Z",
+      role: "admin",
+      members: [{ user_id: "user-2", display_name: "小米", role: "member", joined_at: "2026-11-01T00:00:00Z" }],
+    }
+    const api = createClient({
+      fetch: async (url, init) => {
+        const headers = new Headers(init?.headers)
+        seen.push({
+          url,
+          method: init?.method ?? "",
+          body: String(init?.body ?? ""),
+          csrf: headers.get("X-Pantry-Request"),
+          authorization: headers.get("Authorization"),
+          credentials: init?.credentials,
+        })
+        if (url.endsWith("/leave") || url.includes("/members/")) {
+          return new Response(JSON.stringify({ status: "ok" }), { status: 200 })
+        }
+        return new Response(JSON.stringify(family), { status: 200 })
+      },
+    })
+    expect((await api.renameFamily("新家")).name).toBe("新家")
+    expect((await api.resetInvite()).invite_code).toBe("AB23CD")
+    expect((await api.transferAdmin("user-2")).role).toBe("admin")
+    await api.removeMember("user/2")
+    await api.leaveFamily()
+    expect(seen.map((call) => [call.method, call.url, call.body])).toEqual([
+      ["PATCH", "/api/v1/families/current", JSON.stringify({ name: "新家" })],
+      ["POST", "/api/v1/families/current/invite/reset", JSON.stringify({})],
+      ["POST", "/api/v1/families/current/admin", JSON.stringify({ user_id: "user-2" })],
+      ["DELETE", "/api/v1/families/current/members/user%2F2", ""],
+      ["POST", "/api/v1/families/leave", JSON.stringify({})],
+    ])
+    expect(seen.every((call) => call.csrf === "1" && call.credentials === "include" && call.authorization === null)).toBe(true)
+    expect(JSON.stringify(seen)).not.toContain("purge")
+    expect(JSON.stringify(seen)).not.toContain("share")
+    expect(JSON.stringify(seen)).not.toContain("token")
+  })
+
   it("builds a same-origin socket url and does not invent a public host", () => {
     expect(webSocketUrl("")).toMatch(/^ws:\/\/.+\/api\/v1\/ws$/)
     expect(webSocketUrl("https://127.0.0.1:8443")).toBe("wss://127.0.0.1:8443/api/v1/ws")

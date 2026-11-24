@@ -20,6 +20,7 @@ export type SyncSnapshot = {
   removed: boolean
   revoked: boolean
   refresh: () => Promise<void>
+  adoptFamily: (family: Family | null) => void
 }
 
 export function useFamilySync(
@@ -35,19 +36,24 @@ export function useFamilySync(
   const [removed, setRemoved] = useState(false)
   const [revoked, setRevoked] = useState(false)
   const stateRef = useRef<SyncState>({ rev: 0, items: [] })
+  const epoch = useRef(0)
   const pullRef = useRef<() => Promise<void>>(async () => {})
   const factoryRef = useRef(socketFactory)
   factoryRef.current = socketFactory
 
   const pull = useCallback(async () => {
+    const ticket = epoch.current
     const since = stateRef.current.rev
     let page = await api.sync(since)
+    if (ticket !== epoch.current) return
     let used = since
     if (page.reset) {
       page = await api.sync(0)
+      if (ticket !== epoch.current) return
       used = 0
     }
     const next = applySync(used === 0 ? { rev: 0, items: [] } : stateRef.current, page, used)
+    if (ticket !== epoch.current) return
     stateRef.current = next
     setItems(next.items)
     if (page.family) setFamily(page.family)
@@ -69,8 +75,14 @@ export function useFamilySync(
     }
   }, [pull])
 
+  const adoptFamily = useCallback((next: Family | null) => {
+    setFamily(next)
+    if (next) setError(null)
+  }, [])
+
   useEffect(() => {
     if (!enabled) {
+      epoch.current += 1
       stateRef.current = { rev: 0, items: [] }
       setItems([])
       setFamily(null)
@@ -165,5 +177,5 @@ export function useFamilySync(
     }
   }, [api, enabled, pull])
 
-  return { items, family, loading, live, error, removed, revoked, refresh }
+  return { items, family, loading, live, error, removed, revoked, refresh, adoptFamily }
 }
