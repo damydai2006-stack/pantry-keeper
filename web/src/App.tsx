@@ -32,7 +32,7 @@ export function App({
   const [departed, setDeparted] = useState(false)
   if (me.isSuccess) hadSession.current = true
   const familyId = departed ? null : (me.data?.family_id ?? null)
-  const sync = useFamilySync(api, Boolean(familyId), socketFactory)
+  const sync = useFamilySync(api, Boolean(familyId), socketFactory, familyId)
 
   useEffect(() => {
     if (!sync.revoked) return

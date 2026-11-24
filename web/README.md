@@ -28,7 +28,7 @@
 
 ## 同步
 
-登录并进入家庭后，页面连接 `/api/v1/ws`。收到 `changed` 就按已有 `rev` 增量拉取 `/sync`。连接断开或还没连上时，每 5 秒拉一次；浏览器标签页在后台时不拉。`session_revoked` 回到登录页。`removed_from_family` 或 `not_in_family` 清空清单并回到加入家庭。页面不做离线编辑。
+登录并进入家庭后，页面连接 `/api/v1/ws`。收到 `changed` 就按已有 `rev` 增量拉取 `/sync`。连接断开或还没连上时，每 5 秒拉一次；浏览器标签页在后台时不拉。`session_revoked` 回到登录页。`removed_from_family` 或 `not_in_family` 作废当前同步世代，清空家庭和清单，在途的旧响应不再写回，并回到加入家庭。重新创建或加入之后才开始新家庭的同步。页面不做离线编辑。
 
 ## 本地运行
 
