@@ -4,6 +4,13 @@ import { afterEach, vi } from "vitest"
 
 afterEach(() => cleanup())
 
+// jsdom has no blob URL helpers. The photo view still only puts a blob: URL on the page.
+if (typeof URL.createObjectURL !== "function") {
+  let sequence = 0
+  URL.createObjectURL = () => `blob:photo-${sequence += 1}`
+  URL.revokeObjectURL = () => undefined
+}
+
 class StubWebSocket {
   static CONNECTING = 0
   static OPEN = 1

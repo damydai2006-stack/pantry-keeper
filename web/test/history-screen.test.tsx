@@ -121,6 +121,9 @@ describe("web history restore", () => {
         family: family(),
         notify_time: "09:00",
       }),
+      photo: async () => {
+        throw new Error("photo unused")
+      },
       webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
     } satisfies PantryClient
     renderApp(api)
@@ -186,6 +189,9 @@ describe("web history restore", () => {
         family: family(),
         notify_time: "09:00",
       }),
+      photo: async () => {
+        throw new Error("photo unused")
+      },
       webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
     } satisfies PantryClient
     renderApp(api)

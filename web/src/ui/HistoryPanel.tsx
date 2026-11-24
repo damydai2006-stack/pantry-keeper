@@ -1,6 +1,7 @@
 import { Button, Checkbox, Modal } from "antd"
 import { useEffect, useMemo, useState } from "react"
 import type { Item } from "../api/types"
+import { PhotoEntry } from "./PhotoView"
 import {
   HISTORY_SEGMENTS,
   filterHistory,
@@ -36,12 +37,14 @@ export function HistoryPanel({
   online,
   onRestore,
   onDelete,
+  onViewPhoto,
 }: {
   items: Item[]
   busy: boolean
   online?: boolean
   onRestore: (ids: string[]) => Promise<void>
   onDelete: (ids: string[]) => Promise<void>
+  onViewPhoto: (item: Item) => void
 }) {
   const connected = useOnlineFlag(online)
   const [segment, setSegment] = useState<HistorySegment>("all")
@@ -149,6 +152,7 @@ export function HistoryPanel({
                 <th>原到期日</th>
                 <th>处理日期</th>
                 <th>提醒档位</th>
+                <th>照片</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -177,6 +181,9 @@ export function HistoryPanel({
                   <td>{item.expiry_date}</td>
                   <td>{handledOnLabel(item.status_changed_at)}</td>
                   <td>{tierSummary(item.reminder_tiers)}</td>
+                  <td>
+                    <PhotoEntry name={item.name} photoId={item.photo_id} onOpen={() => onViewPhoto(item)} />
+                  </td>
                   <td>
                     <div className="history-actions">
                       <Button disabled={!connected || busy} onClick={() => void restore([item.id])}>恢复</Button>
