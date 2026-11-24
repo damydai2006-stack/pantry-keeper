@@ -30,9 +30,11 @@ export function App({
   const [familyNotice, setFamilyNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [departed, setDeparted] = useState(false)
+  const [membership, setMembership] = useState(0)
   if (me.isSuccess) hadSession.current = true
   const familyId = departed ? null : (me.data?.family_id ?? null)
-  const sync = useFamilySync(api, Boolean(familyId), socketFactory, familyId)
+  const sessionKey = familyId === null ? null : `${familyId}:${membership}`
+  const sync = useFamilySync(api, Boolean(familyId), socketFactory, sessionKey)
 
   useEffect(() => {
     if (!sync.revoked) return
@@ -91,12 +93,17 @@ export function App({
     queryClient.clear()
   }
 
+  function openMembership() {
+    setMembership((current) => current + 1)
+    setDeparted(false)
+    setFamilyNotice(null)
+  }
+
   async function createFamily(name: string) {
     setBusy(true)
     try {
       await api.createFamily(name)
-      setDeparted(false)
-      setFamilyNotice(null)
+      openMembership()
       await me.refetch()
     } catch (error) {
       if (isApiError(error) && error.code === "already_in_family") {
@@ -113,8 +120,7 @@ export function App({
     setBusy(true)
     try {
       await api.joinFamily(code)
-      setDeparted(false)
-      setFamilyNotice(null)
+      openMembership()
       await me.refetch()
     } catch (error) {
       throw new Error(userMessage(error))

@@ -19,6 +19,10 @@ class ScriptedSocket implements SocketLike {
   }
 }
 
+function noodle(): Item {
+  return { ...milk(), id: "item-new", name: "面条", rev: 5 }
+}
+
 function milk(): Item {
   return {
     id: "item-old",
@@ -352,6 +356,85 @@ describe("app removal timeline", () => {
       await Promise.resolve()
     })
     expect(screen.getByRole("heading", { level: 1, name: "新家" })).toBeInTheDocument()
+    expect(screen.queryByText("牛奶")).toBeNull()
+    expect(screen.queryByText("AB23CD")).toBeNull()
+    expect(screen.queryByText("你已被移出家庭")).toBeNull()
+    expect(calls).toEqual(["join:CD45EF"])
+  })
+
+  it("rejoins the same family id and does not revive the sealed session", async () => {
+    const user = userEvent.setup()
+    const held: Array<(page: SyncPage) => void> = []
+    let mode: "a" | "hang" | "fresh" = "a"
+    let session = me("fam-a")
+    let syncs = 0
+    const calls: string[] = []
+    const sockets: ScriptedSocket[] = []
+    const fresh = page(family("fam-a", "旧家", "CD45EF"), [noodle()])
+    const api = {
+      requestCode: async () => undefined,
+      login: async () => ({ user_id: "user-1", display_name: "自己" }),
+      logout: async () => undefined,
+      me: async () => session,
+      createFamily: async () => oldFamily,
+      joinFamily: async (code: string) => {
+        calls.push(`join:${code}`)
+        session = me("fam-a")
+        mode = "fresh"
+        return fresh.family!
+      },
+      currentFamily: async () => fresh.family!,
+      renameFamily: async () => fresh.family!,
+      resetInvite: async () => fresh.family!,
+      transferAdmin: async () => fresh.family!,
+      removeMember: async () => undefined,
+      leaveFamily: async () => undefined,
+      createItem: async () => milk(),
+      patchItem: async () => ({ item: milk(), overwritten: [], message: null }),
+      batch: async () => ({ rev: 1 }),
+      undoBatch: async () => ({ skipped: 0, restored: 0, message: null }),
+      sync: () => {
+        syncs += 1
+        if (mode === "hang") return new Promise<SyncPage>((resolve) => { held.push(resolve) })
+        return Promise.resolve(mode === "fresh" ? fresh : oldPage)
+      },
+      photo: async () => {
+        throw new Error("unused")
+      },
+      webSocketUrl: () => "ws://127.0.0.1/api/v1/ws",
+    } satisfies PantryClient
+    renderApp(api, () => {
+      const socket = new ScriptedSocket()
+      sockets.push(socket)
+      return socket
+    })
+    expect(await screen.findByText("牛奶")).toBeInTheDocument()
+    mode = "hang"
+    await act(async () => {
+      sockets[0]?.emit({ t: "changed", rev: 4 })
+      sockets[0]?.emit({ t: "removed_from_family" })
+      await Promise.resolve()
+    })
+    expect(held).toHaveLength(1)
+    expect(await screen.findByText("你已被移出家庭")).toBeInTheDocument()
+    expect(session.family_id).toBe("fam-a")
+    await user.type(screen.getByLabelText("邀请码"), "CD45EF")
+    await user.click(screen.getByRole("button", { name: "加入家庭" }))
+    expect(session.family_id).toBe("fam-a")
+    expect(await screen.findByText("面条")).toBeInTheDocument()
+    expect(screen.queryByText("你已被移出家庭")).toBeNull()
+    expect(screen.queryByText("牛奶")).toBeNull()
+    const afterJoin = syncs
+    await act(async () => {
+      for (const resolve of held.splice(0)) resolve(oldPage)
+      sockets[0]?.emit({ t: "changed", rev: 9 })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(syncs).toBe(afterJoin)
+    expect(screen.getByRole("heading", { level: 1, name: "旧家" })).toBeInTheDocument()
+    expect(screen.getByText("面条")).toBeInTheDocument()
+    expect(screen.getByText("CD45EF")).toBeInTheDocument()
     expect(screen.queryByText("牛奶")).toBeNull()
     expect(screen.queryByText("AB23CD")).toBeNull()
     expect(screen.queryByText("你已被移出家庭")).toBeNull()
