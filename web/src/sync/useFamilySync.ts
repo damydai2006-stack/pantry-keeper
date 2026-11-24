@@ -20,12 +20,14 @@ export type SyncSnapshot = {
   removed: boolean
   revoked: boolean
   refresh: () => Promise<void>
+  adoptFamily: (family: Family | null) => void
 }
 
 export function useFamilySync(
   api: PantryClient,
   enabled: boolean,
   socketFactory: (url: string) => SocketLike = (url) => new WebSocket(url) as unknown as SocketLike,
+  sessionKey: string | null = null,
 ): SyncSnapshot {
   const [items, setItems] = useState<Item[]>([])
   const [family, setFamily] = useState<Family | null>(null)
@@ -35,19 +37,36 @@ export function useFamilySync(
   const [removed, setRemoved] = useState(false)
   const [revoked, setRevoked] = useState(false)
   const stateRef = useRef<SyncState>({ rev: 0, items: [] })
+  const epoch = useRef(0)
+  const sealed = useRef(false)
   const pullRef = useRef<() => Promise<void>>(async () => {})
   const factoryRef = useRef(socketFactory)
   factoryRef.current = socketFactory
 
+  const seal = useCallback(() => {
+    epoch.current += 1
+    sealed.current = true
+    stateRef.current = { rev: 0, items: [] }
+    setItems([])
+    setFamily(null)
+    setError(null)
+    setRemoved(true)
+  }, [])
+
   const pull = useCallback(async () => {
+    if (sealed.current) return
+    const ticket = epoch.current
     const since = stateRef.current.rev
     let page = await api.sync(since)
+    if (ticket !== epoch.current || sealed.current) return
     let used = since
     if (page.reset) {
       page = await api.sync(0)
+      if (ticket !== epoch.current || sealed.current) return
       used = 0
     }
     const next = applySync(used === 0 ? { rev: 0, items: [] } : stateRef.current, page, used)
+    if (ticket !== epoch.current || sealed.current) return
     stateRef.current = next
     setItems(next.items)
     if (page.family) setFamily(page.family)
@@ -58,18 +77,29 @@ export function useFamilySync(
     pullRef.current = pull
   }, [pull])
 
+  const noteFailure = useCallback((caught: unknown) => {
+    if (isUnauthorized(caught)) setRevoked(true)
+    else if (isNotInFamily(caught)) seal()
+    else setError(userMessage(caught))
+  }, [seal])
+
   const refresh = useCallback(async () => {
     try {
       await pull()
     } catch (caught) {
-      if (isUnauthorized(caught)) setRevoked(true)
-      else if (isNotInFamily(caught)) setRemoved(true)
-      else setError(userMessage(caught))
+      noteFailure(caught)
       throw caught
     }
-  }, [pull])
+  }, [noteFailure, pull])
+
+  const adoptFamily = useCallback((next: Family | null) => {
+    setFamily(next)
+    if (next) setError(null)
+  }, [])
 
   useEffect(() => {
+    epoch.current += 1
+    sealed.current = false
     if (!enabled) {
       stateRef.current = { rev: 0, items: [] }
       setItems([])
@@ -81,6 +111,11 @@ export function useFamilySync(
       setLoading(false)
       return
     }
+    stateRef.current = { rev: 0, items: [] }
+    setItems([])
+    setFamily(null)
+    setRemoved(false)
+    setError(null)
     let closed = false
     let socket: SocketLike | null = null
     let timer: ReturnType<typeof setInterval> | null = null
@@ -94,9 +129,7 @@ export function useFamilySync(
         if (document.visibilityState === "hidden") return
         void pullRef.current().catch((caught: unknown) => {
           if (closed) return
-          if (isUnauthorized(caught)) setRevoked(true)
-          else if (isNotInFamily(caught)) setRemoved(true)
-          else setError(userMessage(caught))
+          noteFailure(caught)
         })
       }, POLL_MS)
     }
@@ -104,9 +137,7 @@ export function useFamilySync(
     void pull()
       .catch((caught: unknown) => {
         if (closed) return
-        if (isUnauthorized(caught)) setRevoked(true)
-        else if (isNotInFamily(caught)) setRemoved(true)
-        else setError(userMessage(caught))
+        noteFailure(caught)
       })
       .finally(() => {
         if (!closed) setLoading(false)
@@ -121,9 +152,7 @@ export function useFamilySync(
       if (closed || document.visibilityState !== "visible") return
       void pullRef.current().catch((caught: unknown) => {
         if (closed) return
-        if (isUnauthorized(caught)) setRevoked(true)
-        else if (isNotInFamily(caught)) setRemoved(true)
-        else setError(userMessage(caught))
+        noteFailure(caught)
       })
     }
     document.addEventListener("visibilitychange", onVisible)
@@ -139,14 +168,10 @@ export function useFamilySync(
         if (message.t === "ready" || message.t === "changed") {
           void pullRef.current().catch((caught: unknown) => {
             if (closed) return
-            if (isUnauthorized(caught)) setRevoked(true)
-            else if (isNotInFamily(caught)) setRemoved(true)
-            else setError(userMessage(caught))
+            noteFailure(caught)
           })
         } else if (message.t === "removed_from_family") {
-          setRemoved(true)
-          setItems([])
-          stateRef.current = { rev: 0, items: [] }
+          seal()
         } else if (message.t === "session_revoked") {
           setRevoked(true)
         }
@@ -163,7 +188,7 @@ export function useFamilySync(
       document.removeEventListener("visibilitychange", onVisible)
       socket?.close()
     }
-  }, [api, enabled, pull])
+  }, [api, enabled, noteFailure, pull, seal, sessionKey])
 
-  return { items, family, loading, live, error, removed, revoked, refresh }
+  return { items, family, loading, live, error, removed, revoked, refresh, adoptFamily }
 }

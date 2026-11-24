@@ -1,8 +1,9 @@
 import { Button, Checkbox, Input, Modal } from "antd"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { isApiError, type Item } from "../api/types"
+import { isApiError, type Family, type Item } from "../api/types"
 import { basisLabel, categoryLabel, groupItems, itemDaysLabel, itemEffectiveExpiry, listBucket } from "../domain/labels"
 import { HistoryPanel } from "./HistoryPanel"
+import { FamilyManage } from "./FamilyManage"
 import { ItemForm } from "./ItemForm"
 import { PhotoDialog, PhotoEntry, type PhotoLoad } from "./PhotoView"
 
@@ -42,6 +43,10 @@ function useOnlineFlag(forced: boolean | undefined): boolean {
     }
   }, [forced])
   return online
+}
+
+async function familyActionUnavailable(): Promise<void> {
+  throw new Error("家庭操作未接入")
 }
 
 function markedNotice(action: StockAction, count: number): string {
@@ -85,6 +90,14 @@ export function ItemScreen({
   onLoadPhoto = async () => {
     throw new TypeError("当前无网络，请稍后重试")
   },
+  family = null,
+  viewerId = "",
+  onRenameFamily = familyActionUnavailable,
+  onResetInvite = familyActionUnavailable,
+  onTransferAdmin = familyActionUnavailable,
+  onRemoveMember = familyActionUnavailable,
+  onLeaveFamily = familyActionUnavailable,
+  copyText,
 }: {
   familyName: string
   inviteCode: string | null
@@ -108,10 +121,18 @@ export function ItemScreen({
   accountName?: string
   online?: boolean
   onLoadPhoto?: PhotoLoad
+  family?: Family | null
+  viewerId?: string
+  onRenameFamily?: (name: string) => Promise<void>
+  onResetInvite?: () => Promise<void>
+  onTransferAdmin?: (userId: string) => Promise<void>
+  onRemoveMember?: (userId: string) => Promise<void>
+  onLeaveFamily?: () => Promise<void>
+  copyText?: (text: string) => Promise<void>
 }) {
   const connected = useOnlineFlag(online)
   const [query, setQuery] = useState("")
-  const [view, setView] = useState<"list" | "history">("list")
+  const [view, setView] = useState<"list" | "history" | "family">("list")
   const [editing, setEditing] = useState<Item | null | "new">(null)
   const [pendingDelete, setPendingDelete] = useState<Item | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -159,6 +180,12 @@ export function ItemScreen({
     setManaging(false)
     setSelected([])
     setView("history")
+  }
+
+  function openFamily() {
+    setManaging(false)
+    setSelected([])
+    setView("family")
   }
 
   function toggleManage() {
@@ -272,6 +299,9 @@ export function ItemScreen({
           <Button type={view === "history" ? "primary" : "default"} aria-current={view === "history" ? "page" : undefined} onClick={leaveList}>
             历史
           </Button>
+          <Button type={view === "family" ? "primary" : "default"} aria-current={view === "family" ? "page" : undefined} onClick={openFamily}>
+            家庭
+          </Button>
         </nav>
         {accountName ? <div className="muted">{accountName}</div> : null}
       </aside>
@@ -286,7 +316,7 @@ export function ItemScreen({
           <Button onClick={() => void onLogout().catch((caught: unknown) => setNotice(caught instanceof Error ? caught.message : "操作失败"))}>退出登录</Button>
         </div>
       </div>
-      {inviteCode ? (
+      {view !== "family" && inviteCode ? (
         <div className="panel">
           <div className="muted">邀请码，所有成员可复制。有效期至 {inviteExpires?.slice(0, 10) || "未知"}。</div>
           <strong aria-label="当前邀请码">{inviteCode}</strong>
@@ -298,8 +328,25 @@ export function ItemScreen({
           </Button>
         </div>
       ) : null}
-      {error ? <div role="alert">{error}</div> : null}
+      {view !== "family" && error ? <div role="alert">{error}</div> : null}
       {notice ? <div role="status">{notice}</div> : null}
+      {view === "family" ? (
+        <FamilyManage
+          family={family}
+          viewerId={viewerId}
+          loading={loading}
+          error={error}
+          online={connected}
+          busy={busy}
+          onRefresh={onRefresh}
+          onRename={onRenameFamily}
+          onResetInvite={onResetInvite}
+          onTransfer={onTransferAdmin}
+          onRemove={onRemoveMember}
+          onLeave={onLeaveFamily}
+          copyText={copyText}
+        />
+      ) : null}
       {view === "history" ? (
         <HistoryPanel
           items={items}
